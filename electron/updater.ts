@@ -1,13 +1,17 @@
-import { app, dialog, Notification, type BrowserWindow } from 'electron'
+import { app, ipcMain, Notification, type BrowserWindow } from 'electron'
 import electronUpdater from 'electron-updater'
 
 // electron-updater — CommonJS; при ESM ("type":"module") берём autoUpdater из default-экспорта.
 const { autoUpdater } = electronUpdater
 
-// Авто-обновление через публичный GitHub-репо (MrrMD/chazhland_desktop → latest.yml в релизе, provider
-// зашит в app-update.yml при сборке из build.publish). Работает ТОЛЬКО в упакованной сборке — в dev нет
-// app-update.yml, апдейтить нечего. Логика: проверка через 10 с после старта + раз в 2 ч, автоскачивание,
-// по готовности — предложение перезапустить (иначе установится при следующем закрытии приложения).
+type UpdatePayload = { version: string; releaseNotes?: string }
+let pending: UpdatePayload | null = null // последнее «загружено» — на случай, если UI ещё не смонтирован
+
+// Авто-обновление через публичный GitHub-репо (MrrMD/chazhland_desktop → latest.yml в релизе; releaseNotes
+// апдейтер берёт из тела релиза через releases.atom). Работает ТОЛЬКО в упакованной сборке. Логика: проверка
+// через 10с после старта + раз в 2ч, автоскачивание; по готовности — событие в рендерер (окно «Что нового»
+// с кнопкой «Перезапустить»), иначе установится при следующем закрытии. UI показывает своё окно; тут только
+// системное уведомление как ненавязчивый сигнал.
 export function setupAutoUpdate(getWin: () => BrowserWindow | null) {
   if (!app.isPackaged) return
 
@@ -15,24 +19,16 @@ export function setupAutoUpdate(getWin: () => BrowserWindow | null) {
   autoUpdater.autoInstallOnAppQuit = true
   autoUpdater.logger = console as unknown as typeof autoUpdater.logger
 
-  let prompted = false
-  autoUpdater.on('update-downloaded', async (info) => {
-    if (prompted) return // не спамим диалогом, если проверка сработала повторно
-    prompted = true
+  // рендерер запрашивает буфер при монтировании (если событие пришло раньше готовности UI)
+  ipcMain.handle('update:getPending', () => pending)
+  // кнопка «Перезапустить сейчас» из окна «Что нового»
+  ipcMain.handle('update:install', () => { setImmediate(() => autoUpdater.quitAndInstall()) })
+
+  autoUpdater.on('update-downloaded', (info) => {
+    const releaseNotes = typeof info.releaseNotes === 'string' ? info.releaseNotes : undefined
+    pending = { version: info.version, releaseNotes }
     try { new Notification({ title: 'chazhland', body: `Обновление ${info.version} загружено` }).show() } catch { /* уведомления недоступны — не критично */ }
-    const opts = {
-      type: 'info' as const,
-      buttons: ['Перезапустить сейчас', 'Позже'],
-      defaultId: 0,
-      cancelId: 1,
-      title: 'Доступно обновление',
-      message: `Версия ${info.version} загружена`,
-      detail: 'Перезапустить приложение, чтобы установить обновление? Иначе оно применится при следующем закрытии.',
-      noLink: true,
-    }
-    const win = getWin()
-    const res = win ? await dialog.showMessageBox(win, opts) : await dialog.showMessageBox(opts)
-    if (res.response === 0) setImmediate(() => autoUpdater.quitAndInstall())
+    getWin()?.webContents.send('update:downloaded', pending)
   })
   autoUpdater.on('error', (err) => console.error('[updater] error:', err?.message || err))
 

@@ -50,6 +50,14 @@ declare global {
     notify: (p: { title: string; body: string; channelId?: string }) => Promise<void>
     onNotificationClick: (cb: (d: { channelId: string }) => void) => () => void
     setBadge: (count: number) => void
+    /** Версия приложения (из package.json, только в упакованной сборке). */
+    getVersion: () => Promise<string>
+    /** Буфер «обновление загружено» — если событие пришло до монтирования UI. */
+    getPendingUpdate: () => Promise<{ version: string; releaseNotes?: string } | null>
+    /** Подписка на «обновление загружено» (releaseNotes — HTML тела GitHub-релиза); возвращает отписку. */
+    onUpdateDownloaded: (cb: (d: { version: string; releaseNotes?: string }) => void) => () => void
+    /** Перезапустить и установить скачанное обновление. */
+    restartToUpdate: () => Promise<void>
     /** Авто-idle: подписка на смену простоя системы (main опрашивает powerMonitor); возвращает отписку. */
     onIdleChange: (cb: (d: { idle: boolean }) => void) => () => void
     setMicHotkey: (accel: string | null) => Promise<string | null>

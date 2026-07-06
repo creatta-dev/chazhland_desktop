@@ -259,6 +259,7 @@ app.whenReady().then(() => {
   sweepTorrentCacheOnStartup()
   registerTorrentIpc(() => win) // ОДИН раз (не в createWindow — иначе двойные ipcMain.handle)
   registerMpvIpc(() => win)
+  ipcMain.handle('app:version', () => app.getVersion()) // stateless — регистрируем один раз здесь, не в createWindow
   createWindow()
   createTray()
   startIdleWatch()

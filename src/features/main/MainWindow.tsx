@@ -23,6 +23,7 @@ import { StatsPanel } from './StatsPanel'
 import { MuseumPanel } from './MuseumPanel'
 import { AchievementsPanel } from './AchievementsPanel'
 import { ProfileModal } from './ProfileModal'
+import { UpdateModal } from './UpdateModal'
 import { AdminScreen } from '@/features/admin/AdminScreen'
 import { ws } from '@/lib/ws'
 import { toast } from '@/lib/toast'
@@ -49,6 +50,7 @@ export function MainWindow() {
   const [dms, setDms] = useState<Dm[]>([])
   const [members, setMembers] = useState<Member[]>([])
   const [roles, setRoles] = useState<ServerRole[]>([]) // кастомные роли сервера (для цветных ников/бейджей)
+  const [update, setUpdate] = useState<{ version: string; notes?: string } | null>(null) // окно «Что нового» при готовом обновлении
   const [memberRanks, setMemberRanks] = useState<Map<string, MemberRank>>(new Map()) // ранг-чипы у ников
   const [myRank, setMyRank] = useState<MyRank | null>(null) // мой прогресс (пик + пер-сервер с порогами XP)
   const [celebrate, setCelebrate] = useState<{ level: number; unlocked: number; nonce: number } | null>(null) // момент апа уровня
@@ -396,6 +398,14 @@ export function MainWindow() {
   useEffect(() => {
     if (!window.chazh?.onNotificationClick) return
     return window.chazh.onNotificationClick(({ channelId }) => { setCurrentId(channelId); setView('chat'); setPanel(null) })
+  }, [])
+
+  // авто-обновление: показываем окно «Что нового», когда апдейтер скачал новую версию.
+  // Подписка + разовый запрос буфера (если событие пришло до монтирования окна).
+  useEffect(() => {
+    if (!window.chazh?.onUpdateDownloaded) return
+    window.chazh.getPendingUpdate?.().then((p) => { if (p) setUpdate({ version: p.version, notes: p.releaseNotes }) }).catch(() => {})
+    return window.chazh.onUpdateDownloaded((p) => setUpdate({ version: p.version, notes: p.releaseNotes }))
   }, [])
 
   // авто-idle по простою системы (main опрашивает powerMonitor): online→idle и обратно;
@@ -783,6 +793,7 @@ export function MainWindow() {
       {screenPickerOpen && <ScreenPicker onClose={() => setScreenPickerOpen(false)} onPick={async (id) => { setScreenPickerOpen(false); await window.chazh?.pickScreenSource(id); voice.toggleScreen() }} />}
       {channelEdit && <ChannelSettingsModal channel={channelEdit} onClose={() => setChannelEdit(null)} onSaved={saveChannel} onDeleted={deleteChannelNow} />}
       {serverActionsOpen && <ServerActionsModal onClose={() => setServerActionsOpen(false)} onDone={onServerJoined} />}
+      {update && <UpdateModal version={update.version} notes={update.notes} onClose={() => setUpdate(null)} />}
     </div>
   )
 }

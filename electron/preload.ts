@@ -15,6 +15,15 @@ contextBridge.exposeInMainWorld('chazh', {
     return () => ipcRenderer.removeListener('notif:clicked', h)
   },
   setBadge: (count: number) => ipcRenderer.send('app:badge', count),
+  // авто-обновление: версия приложения + событие «обновление загружено» (+ буфер, если пришло до готовности UI) + запуск установки
+  getVersion: (): Promise<string> => ipcRenderer.invoke('app:version'),
+  getPendingUpdate: (): Promise<{ version: string; releaseNotes?: string } | null> => ipcRenderer.invoke('update:getPending'),
+  onUpdateDownloaded: (cb: (d: { version: string; releaseNotes?: string }) => void) => {
+    const h = (_e: IpcRendererEvent, d: { version: string; releaseNotes?: string }) => cb(d)
+    ipcRenderer.on('update:downloaded', h)
+    return () => ipcRenderer.removeListener('update:downloaded', h)
+  },
+  restartToUpdate: (): Promise<void> => ipcRenderer.invoke('update:install'),
   // авто-idle: main опрашивает простой системы и шлёт idle:true/false
   onIdleChange: (cb: (d: { idle: boolean }) => void) => {
     const h = (_e: IpcRendererEvent, d: { idle: boolean }) => cb(d)
