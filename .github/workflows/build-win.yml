@@ -87,6 +87,19 @@ jobs:
             release/*.exe
             release/*.zip
 
+      - name: Publish Windows update metadata to Release (tag)
+        # latest.yml + .blockmap — по ним electron-updater видит новую версию и качает дельту.
+        # electron-builder генерит их в release/ при наличии build.publish даже с --publish never.
+        # best-effort (fail_on_unmatched: false): установщики уже залиты выше — метаданные не должны валить релиз.
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          fail_on_unmatched_files: false
+          files: |
+            release/latest.yml
+            release/*.blockmap
+
       - name: Upload Windows artifact (manual runs only)
         # Ручной запуск без тега: кладём в Actions-артефакты. best-effort — переполненная квота
         # хранилища НЕ должна валить сборку.
@@ -131,6 +144,17 @@ jobs:
           tag_name: ${{ github.ref_name }}
           fail_on_unmatched_files: true
           files: release/*.AppImage
+
+      - name: Publish Linux update metadata to Release (tag)
+        # latest-linux.yml (+ blockmap) для electron-updater AppImage-обновлений. best-effort, см. Windows.
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          fail_on_unmatched_files: false
+          files: |
+            release/latest-linux.yml
+            release/*.blockmap
 
       - name: Upload Linux artifact (manual runs only)
         if: github.event_name == 'workflow_dispatch'

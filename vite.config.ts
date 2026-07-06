@@ -10,9 +10,9 @@ export default defineConfig({
     electron({
       main: {
         entry: 'electron/main.ts',
-        // webtorrent (ESM) + его нативные deps не бандлим — грузятся из node_modules в рантайме
-        // (поэтому они должны попасть в asar/asarUnpack, см. package.json build).
-        vite: { build: { rollupOptions: { external: ['webtorrent', 'node-datachannel'] } } },
+        // webtorrent (ESM) + нативные deps + electron-updater не бандлим — грузятся из node_modules в
+        // рантайме (updater ещё и ищет app-update.yml относительно node_modules; бандл ломает lazy-require).
+        vite: { build: { rollupOptions: { external: ['webtorrent', 'node-datachannel', 'electron-updater'] } } },
       },
       preload: {
         input: path.join(__dirname, 'electron/preload.ts'),

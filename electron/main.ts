@@ -4,6 +4,7 @@ import fs from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { registerTorrentIpc, sweepTorrentCacheOnStartup, teardownTorrent } from './torrent'
 import { registerMpvIpc, teardownMpv } from './mpv'
+import { setupAutoUpdate } from './updater'
 
 // ESM-сборка (package.json "type":"module") — __dirname недоступен, вычисляем сами
 const appDir = path.dirname(fileURLToPath(import.meta.url))
@@ -261,6 +262,7 @@ app.whenReady().then(() => {
   createWindow()
   createTray()
   startIdleWatch()
+  setupAutoUpdate(() => win) // авто-обновление (только в упакованной сборке)
 })
 
 app.on('before-quit', () => {
