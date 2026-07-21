@@ -73,6 +73,14 @@ export function profileBgLayer(id?: string): CSSProperties | null {
 }
 
 /**
+ * Нижняя граница уровня для каждого из 16 тиров каталога (ranks.json → tiers[].levelFrom).
+ * Индекс массива = tier − 1. Каталог тиров приходит с бэка (RankCatalog.tiers), но badgeMeta —
+ * чистая функция без доступа к нему, поэтому таблица продублирована здесь; при правке ranks.json
+ * менять и её.
+ */
+const TIER_LEVEL_FROM = [1, 6, 13, 23, 35, 49, 65, 83, 101, 119, 137, 155, 171, 185, 195, 201]
+
+/**
  * Косметика-бейдж: маленькая эмблема у ника. Основатель — золотая корона; тир-бейдж — цвет по тиру +
  * номер; прочее — акцентная звезда. Возвращает {bg, glyph} или null.
  */
@@ -82,7 +90,9 @@ export function badgeMeta(id?: string): { bg: string; glyph: string } | null {
   const m = id.match(/^badge\.tier\.(\d+)$/)
   if (m) {
     const tier = Number(m[1])
-    const c = rankColor(Math.min(220, tier * 14)) // тир→репрезентативный уровень→цвет тира
+    // цвет — по НАЧАЛЬНОМУ уровню тира из каталога; арифметика tier*14 промахивалась мимо бэндов
+    // rankColor (тир 1 рисовался бронзой, тир 5 — золотом)
+    const c = rankColor(TIER_LEVEL_FROM[tier - 1] ?? 1)
     return { bg: `linear-gradient(135deg,${c},${hexA(c, 0.55)})`, glyph: String(tier) }
   }
   if (id.startsWith('badge')) return { bg: 'linear-gradient(135deg,var(--accent),#13b886)', glyph: '✦' }

@@ -2,16 +2,20 @@ import { useEffect, useRef, useState } from 'react'
 import { Plus, Smile, Send, X, Type, Bold, Italic, Strikethrough, Code, EyeOff } from 'lucide-react'
 import { api } from '@/lib/api'
 import { toast } from '@/lib/toast'
+import { apiError } from '@/lib/http'
 import { useEscape } from '@/lib/useEscape'
 import { EMOJIS } from '@/lib/emojis'
 import type { AttachmentInput } from '@/lib/types'
+import { Spinner } from '@/components/ui'
 
 interface Pending { id: string; file: File; previewUrl: string; status: 'up' | 'done' | 'err'; out?: AttachmentInput }
 const MAX_ATTACH = 10 // лимит бэка
+const MAX_LEN = 4000  // @Size(max = 4000) в web/dto/MessageCreateRequest — менять вместе с бэком
+const COUNTER_FROM = MAX_LEN - 300 // счётчик показываем только на подходе к лимиту, чтобы не мозолил глаза
 
 export function Composer({ channelName, onSend, onType, replyToName, onCancelReply }: {
   channelName: string
-  onSend: (text: string, attachments?: AttachmentInput[]) => void
+  onSend: (text: string, attachments?: AttachmentInput[]) => Promise<void>
   onType?: () => void
   replyToName?: string | null
   onCancelReply?: () => void
@@ -21,6 +25,7 @@ export function Composer({ channelName, onSend, onType, replyToName, onCancelRep
   const [emojiOpen, setEmojiOpen] = useState(false)
   const [fmtOpen, setFmtOpen] = useState(false)
   const [dragOver, setDragOver] = useState(false)
+  const [sending, setSending] = useState(false) // ждём ответ сервера — поле не чистим и не шлём повторно
   const lastTyped = useRef(0)
   const fileRef = useRef<HTMLInputElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
@@ -70,7 +75,7 @@ export function Composer({ channelName, onSend, onType, replyToName, onCancelRep
       setPending((ps) => [...ps, { id, file, previewUrl, status: 'up' }])
       api.uploadFile(file)
         .then((out) => patch(id, { status: 'done', out }))
-        .catch(() => { patch(id, { status: 'err' }); toast.error(`Не удалось загрузить ${file.name}`) })
+        .catch((e) => { patch(id, { status: 'err' }); toast.error(apiError(e, `Не удалось загрузить ${file.name}`)) })
     }
   }
 
@@ -87,15 +92,21 @@ export function Composer({ channelName, onSend, onType, replyToName, onCancelRep
     setPending([])
   }
 
-  function submit(e: React.FormEvent) {
+  async function submit(e: React.FormEvent) {
     e.preventDefault()
-    if (uploading) return // ждём завершения аплоада
+    if (uploading || sending) return // ждём завершения аплоада / предыдущей отправки
     const t = text.trim()
     const atts = pending.filter((p) => p.status === 'done' && p.out).map((p) => p.out!)
     if (!t && atts.length === 0) return
-    onSend(t, atts.length ? atts : undefined)
-    setText('')
-    clearPending()
+    if (t.length > MAX_LEN) { toast.error(`Слишком длинное сообщение: ${t.length} из ${MAX_LEN} символов`); return }
+    const sent = text // чистим ровно то, что ушло: пока летел POST, пользователь мог начать печатать дальше
+    setSending(true)
+    try {
+      await onSend(t, atts.length ? atts : undefined)
+      setText((cur) => (cur === sent ? '' : cur)) // очищаем ТОЛЬКО после подтверждения — иначе отвергнутый текст терялся
+      clearPending()
+    } catch { /* ошибку показал вызывающий; текст и вложения остаются в поле, можно повторить */ }
+    finally { setSending(false) }
   }
 
   function onChange(e: React.ChangeEvent<HTMLInputElement>) {
@@ -143,7 +154,7 @@ export function Composer({ channelName, onSend, onType, replyToName, onCancelRep
               {p.previewUrl
                 ? <img src={p.previewUrl} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
                 : <span style={{ fontSize: 10, color: 'var(--text-3)', padding: 6, textAlign: 'center', wordBreak: 'break-all', lineHeight: 1.3 }}>{p.file.name}</span>}
-              {p.status === 'up' && <div style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,.35)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Spinner /></div>}
+              {p.status === 'up' && <div style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,.35)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Spinner size={18} /></div>}
               {p.status === 'err' && <div style={{ position: 'absolute', inset: 0, background: 'var(--danger-tint)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--danger)', fontSize: 10, fontWeight: 700 }}>ошибка</div>}
               <button type="button" className="no-drag" onClick={() => remove(p.id)} title="Убрать" style={{ position: 'absolute', top: 3, right: 3, width: 20, height: 20, borderRadius: 6, border: 'none', background: 'rgba(0,0,0,.6)', color: '#fff', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><X size={12} /></button>
             </div>
@@ -154,7 +165,12 @@ export function Composer({ channelName, onSend, onType, replyToName, onCancelRep
       <input ref={fileRef} type="file" multiple hidden onChange={(e) => { addFiles(e.target.files); e.target.value = '' }} />
       <div className="field" style={{ borderRadius: replyToName ? '0 0 16px 16px' : 16, border: '1px solid var(--border)', background: 'var(--surface)', padding: '11px 14px 11px 16px', gap: 12 }}>
         <button type="button" className="ib no-drag" onClick={() => fileRef.current?.click()} style={{ width: 32, height: 32, borderRadius: 9, background: 'var(--surface-2)' }} title="Вложение"><Plus size={18} /></button>
-        <input ref={inputRef} value={text} onChange={onChange} onPaste={onPaste} placeholder={`Написать в #${channelName}…`} style={{ fontSize: 14.5 }} />
+        <input ref={inputRef} value={text} onChange={onChange} onPaste={onPaste} maxLength={MAX_LEN} placeholder={`Написать в #${channelName}…`} style={{ fontSize: 14.5 }} />
+        {text.length >= COUNTER_FROM && (
+          <span style={{ flex: 'none', fontSize: 11.5, fontWeight: 700, fontVariantNumeric: 'tabular-nums', color: text.length >= MAX_LEN ? 'var(--danger)' : 'var(--text-3)' }} title={`Лимит сообщения — ${MAX_LEN} символов`}>
+            {text.length}/{MAX_LEN}
+          </span>
+        )}
         <span style={{ position: 'relative', display: 'flex' }}>
           <button type="button" className="ib no-drag" onClick={() => setFmtOpen((v) => !v)} style={{ width: 32, height: 32, color: fmtOpen ? 'var(--accent)' : undefined }} title="Форматирование"><Type size={18} /></button>
           {fmtOpen && (
@@ -183,7 +199,7 @@ export function Composer({ channelName, onSend, onType, replyToName, onCancelRep
             </>
           )}
         </span>
-        <button type="submit" disabled={uploading} className="accent-btn" style={{ width: 40, height: 40, borderRadius: 12, boxShadow: '0 4px 12px var(--accent-tint)', display: 'flex', alignItems: 'center', justifyContent: 'center', opacity: uploading ? 0.6 : 1 }} title={uploading ? 'Загрузка вложений…' : 'Отправить'}>{uploading ? <Spinner /> : <Send size={17} />}</button>
+        <button type="submit" disabled={uploading || sending} className="accent-btn" style={{ width: 40, height: 40, borderRadius: 12, boxShadow: '0 4px 12px var(--accent-tint)', display: 'flex', alignItems: 'center', justifyContent: 'center', opacity: uploading || sending ? 0.6 : 1 }} title={uploading ? 'Загрузка вложений…' : sending ? 'Отправляем…' : 'Отправить'}>{uploading || sending ? <Spinner size={18} /> : <Send size={17} />}</button>
       </div>
     </form>
   )
@@ -191,8 +207,4 @@ export function Composer({ channelName, onSend, onType, replyToName, onCancelRep
 
 function FmtBtn({ children, title, onClick }: { children: React.ReactNode; title: string; onClick: () => void }) {
   return <button type="button" className="ib no-drag" onClick={onClick} title={title} style={{ width: 32, height: 32, borderRadius: 8 }}>{children}</button>
-}
-
-function Spinner() {
-  return <span style={{ width: 18, height: 18, border: '2.5px solid rgba(255,255,255,.4)', borderTopColor: '#fff', borderRadius: '50%', animation: 'spin .7s linear infinite' }} />
 }

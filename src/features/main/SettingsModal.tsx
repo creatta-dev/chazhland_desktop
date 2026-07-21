@@ -4,6 +4,7 @@ import { Modal } from '@/components/Modal'
 import { Avatar } from '@/components/Avatar'
 import { api } from '@/lib/api'
 import { toast } from '@/lib/toast'
+import { apiError } from '@/lib/http'
 import { useAuth } from '@/store/auth'
 import { useTheme } from '@/theme/ThemeProvider'
 import { ACCENTS, type ThemeName } from '@/theme/themes'
@@ -11,6 +12,7 @@ import { notifyPrefs } from '@/lib/prefs'
 import { msgAccentColor, nameStyle, SLOT_LABELS, SLOT_ORDER } from '@/lib/cosmetics'
 import { RankBadge } from '@/components/RankBadge'
 import { CosmeticBackground } from '@/components/CosmeticBackground'
+import { Button, Spinner, Switch } from '@/components/ui'
 import { loadouts, type Loadout } from '@/lib/loadouts'
 import { SettingsAudio } from './SettingsAudio'
 import type { MyRank, RankCatalog, RankCosmetic } from '@/lib/types'
@@ -56,7 +58,7 @@ export function SettingsModal({ onClose, onEquipChange, onProfileBgChange, initi
       const updated = await api.updateProfile({ username: u, statusMessage: statusMsg.trim() })
       updateUser({ username: updated.username, statusMessage: updated.statusMessage })
       toast.ok('Профиль сохранён')
-    } catch { toast.error('Не удалось сохранить профиль') }
+    } catch (e) { toast.error(apiError(e, 'Не удалось сохранить профиль')) }
     finally { setSavingProfile(false) }
   }
 
@@ -69,7 +71,7 @@ export function SettingsModal({ onClose, onEquipChange, onProfileBgChange, initi
       const updated = await api.setAvatar(up.objectKey)
       updateUser({ avatarUrl: updated.avatarUrl })
       toast.ok('Аватар обновлён')
-    } catch { toast.error('Не удалось загрузить аватар') }
+    } catch (e) { toast.error(apiError(e, 'Не удалось загрузить аватар')) }
     finally { setAvatarBusy(false) }
   }
 
@@ -81,12 +83,12 @@ export function SettingsModal({ onClose, onEquipChange, onProfileBgChange, initi
       await api.changePassword({ currentPassword: curPw, newPassword: newPw })
       setCurPw(''); setNewPw(''); setConfirmPw('')
       toast.ok('Пароль изменён')
-    } catch { toast.error('Не удалось сменить пароль — проверьте текущий') }
+    } catch (e) { toast.error(apiError(e, 'Не удалось сменить пароль — проверьте текущий')) }
     finally { setPwBusy(false) }
   }
 
   async function doLogoutAll() {
-    try { await api.logoutAll(); toast.ok('Все сессии завершены'); logout() } catch { toast.error('Не удалось завершить сессии') }
+    try { await api.logoutAll(); toast.ok('Все сессии завершены'); logout() } catch (e) { toast.error(apiError(e, 'Не удалось завершить сессии')) }
   }
 
   return (
@@ -112,7 +114,7 @@ export function SettingsModal({ onClose, onEquipChange, onProfileBgChange, initi
               <div style={{ display: 'flex', alignItems: 'center', gap: 15, marginBottom: 16 }}>
                 <div style={{ position: 'relative' }}>
                   <Avatar name={user.username} src={user.avatarUrl} size={64} />
-                  {avatarBusy && <div style={{ position: 'absolute', inset: 0, borderRadius: '50%', background: 'rgba(0,0,0,.4)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Spinner /></div>}
+                  {avatarBusy && <div style={{ position: 'absolute', inset: 0, borderRadius: '50%', background: 'rgba(0,0,0,.4)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Spinner size={20} /></div>}
                 </div>
                 <div>
                   <button type="button" className="pill no-drag" onClick={() => fileRef.current?.click()} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 14px', fontWeight: 600, fontSize: 13 }}><Camera size={15} /> Изменить аватар</button>
@@ -121,11 +123,12 @@ export function SettingsModal({ onClose, onEquipChange, onProfileBgChange, initi
                 <input ref={fileRef} type="file" accept="image/*" hidden onChange={(e) => { pickAvatar(e.target.files?.[0]); e.target.value = '' }} />
               </div>
               <label style={lbl}>Имя пользователя</label>
-              <div className="field" style={fieldS}><input value={username} onChange={(e) => setUsername(e.target.value)} placeholder="ваш ник" /></div>
+              {/* maxLength — как @Size(max = 32) в web/dto/ProfileUpdateRequest: иначе правка отлетала 400-й уже после клика */}
+              <div className="field" style={fieldS}><input value={username} onChange={(e) => setUsername(e.target.value)} placeholder="ваш ник" maxLength={32} /></div>
               <label style={lbl}>О себе / статус</label>
               <div className="field" style={fieldS}><input value={statusMsg} onChange={(e) => setStatusMsg(e.target.value)} placeholder="например, на удалёнке" maxLength={255} /></div>
               <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-                <button type="button" className="accent-btn no-drag" disabled={!profileDirty || savingProfile} onClick={saveProfile} style={{ borderRadius: 11, padding: '9px 18px', fontWeight: 700, opacity: !profileDirty || savingProfile ? 0.55 : 1 }}>{savingProfile ? 'Сохранение…' : 'Сохранить'}</button>
+                <Button type="button" size="sm" disabled={!profileDirty || savingProfile} onClick={saveProfile}>{savingProfile ? 'Сохранение…' : 'Сохранить'}</Button>
               </div>
             </>
           )}
@@ -177,7 +180,7 @@ export function SettingsModal({ onClose, onEquipChange, onProfileBgChange, initi
               <label style={lbl}>Повторите новый пароль</label>
               <div className="field" style={fieldS}><input type="password" value={confirmPw} onChange={(e) => setConfirmPw(e.target.value)} placeholder="••••••••" /></div>
               <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 4 }}>
-                <button type="button" className="accent-btn no-drag" disabled={pwBusy || !curPw || !newPw || !confirmPw} onClick={savePassword} style={{ borderRadius: 11, padding: '9px 18px', fontWeight: 700, opacity: pwBusy || !curPw || !newPw || !confirmPw ? 0.55 : 1 }}>{pwBusy ? 'Смена…' : 'Сменить пароль'}</button>
+                <Button type="button" size="sm" disabled={pwBusy || !curPw || !newPw || !confirmPw} onClick={savePassword}>{pwBusy ? 'Смена…' : 'Сменить пароль'}</Button>
               </div>
               <div style={{ height: 1, background: 'var(--border)', margin: '18px 0' }} />
               <button type="button" className="danger-btn no-drag" onClick={doLogoutAll} style={{ display: 'flex', alignItems: 'center', gap: 8, borderRadius: 11, padding: '10px 16px', fontWeight: 600, fontSize: 13 }}><LogOut size={15} /> Выйти со всех устройств</button>
@@ -240,13 +243,13 @@ function CosmeticsSection({ meId, meName, meAvatar, onEquipChange, onProfileBgCh
       const url = await api.setProfileBackground(up.objectKey)
       setBgUrl(url); onProfileBgChange?.(url)
       toast.ok('Фон профиля обновлён')
-    } catch { toast.error('Не удалось загрузить фон') }
+    } catch (e) { toast.error(apiError(e, 'Не удалось загрузить фон')) }
     finally { setBgBusy(false) }
   }
   async function removeBg() {
     setBgBusy(true)
     try { await api.clearProfileBackground(); setBgUrl(null); onProfileBgChange?.(null); toast.ok('Фон профиля снят') }
-    catch { toast.error('Не удалось снять фон') }
+    catch (e) { toast.error(apiError(e, 'Не удалось снять фон')) }
     finally { setBgBusy(false) }
   }
 
@@ -261,10 +264,10 @@ function CosmeticsSection({ meId, meName, meAvatar, onEquipChange, onProfileBgCh
       const saved = await api.equipCosmetic(slot, cosmeticId)
       setEquipped(saved)
       onEquipChange?.(saved)
-    } catch {
+    } catch (e) {
       setEquipped(prev) // откат только этого изменения — прежние удачные экипировки сохраняются
       onEquipChange?.(prev) // держим родителя (рейл/чат/мини-профиль) в синхроне с откатом
-      toast.error('Не удалось применить')
+      toast.error(apiError(e, 'Не удалось применить косметику'))
     } finally { setBusy(null) }
   }
 
@@ -405,13 +408,7 @@ function ToggleRow({ label, hint, on, onChange }: { label: string; hint?: string
         <div style={{ fontSize: 13.5, fontWeight: 600, color: 'var(--text)' }}>{label}</div>
         {hint && <div style={{ fontSize: 11.5, color: 'var(--text-3)' }}>{hint}</div>}
       </div>
-      <button type="button" role="switch" aria-checked={on} aria-label={label} onClick={() => onChange(!on)} className="no-drag" style={{ flex: 'none', width: 42, height: 24, borderRadius: 20, border: 'none', cursor: 'pointer', background: on ? 'var(--accent)' : 'var(--surface-3)', position: 'relative', transition: 'background .2s' }}>
-        <span style={{ position: 'absolute', top: 3, left: on ? 21 : 3, width: 18, height: 18, borderRadius: '50%', background: '#fff', transition: 'left .2s' }} />
-      </button>
+      <Switch checked={on} onChange={onChange} ariaLabel={label} offColor="var(--surface-3)" />
     </div>
   )
-}
-
-function Spinner() {
-  return <span style={{ width: 20, height: 20, border: '2.5px solid rgba(255,255,255,.4)', borderTopColor: '#fff', borderRadius: '50%', animation: 'spin .7s linear infinite' }} />
 }

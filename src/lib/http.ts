@@ -76,4 +76,25 @@ export class HttpError extends Error {
   }
 }
 
+// Тело ошибки бэка (com.chazhland.messenger.config.ApiError):
+// { status, message, timestamp, fieldErrors? } — fieldErrors есть только у 400 от @Valid.
+interface ApiErrorBody { message?: unknown; fieldErrors?: unknown }
+
+/**
+ * Человеческий текст ошибки для тоста: реальное сообщение бэка вместо догадки вызывающего.
+ * Приоритет — первая ошибка поля (у валидации message = «Validation failed», толку ноль),
+ * затем message, затем fallback (не HttpError / пустое или не-JSON тело).
+ */
+export function apiError(e: unknown, fallback: string): string {
+  if (!(e instanceof HttpError) || !e.body) return fallback
+  let body: ApiErrorBody
+  try { body = JSON.parse(e.body) as ApiErrorBody } catch { return fallback }
+  const fe = body?.fieldErrors
+  if (fe && typeof fe === 'object') {
+    const first = Object.values(fe as Record<string, unknown>).find((v) => typeof v === 'string' && v.trim())
+    if (typeof first === 'string') return first
+  }
+  return typeof body?.message === 'string' && body.message.trim() ? body.message : fallback
+}
+
 export const delay = (ms: number) => new Promise((r) => setTimeout(r, ms))

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { Hash, Volume2, Play, Lock, Globe, Check, Minus, X, Plus } from 'lucide-react'
 import { api } from '@/lib/api'
 import { toast } from '@/lib/toast'
+import { apiError } from '@/lib/http'
 import { Avatar } from '@/components/Avatar'
 import { PERMISSIONS, DEFAULT_ROLE_COLOR } from '@/lib/permissions'
 import type { Channel, ChannelOverwrite, ChannelType, Member, OverwriteTarget, Permission, ServerRole } from '@/lib/types'
@@ -10,9 +11,12 @@ type Tri = 'allow' | 'neutral' | 'deny'
 const labelOf = (p: Permission) => PERMISSIONS.find((x) => x.key === p)?.label ?? p
 const CH_ICON: Record<ChannelType, React.ReactNode> = { TEXT: <Hash size={15} />, VOICE: <Volume2 size={15} />, WATCH: <Play size={15} />, DM: <Hash size={15} /> }
 
-// какие права уместны на канале данного типа
+// Какие права уместны на канале данного типа.
+// WATCH здесь вместе с VOICE: бэк требует CONNECT на управление просмотром (WatchService — загрузка
+// источника, play/pause/seek и поиск по трекерам), а без строки в этой таблице право нельзя было ни
+// выдать, ни отнять — кинозал оставался неуправляемым из админки.
 function permsForChannel(type: ChannelType): Permission[] {
-  if (type === 'VOICE') return ['VIEW_CHANNEL', 'CONNECT']
+  if (type === 'VOICE' || type === 'WATCH') return ['VIEW_CHANNEL', 'CONNECT']
   return ['VIEW_CHANNEL', 'SEND_MESSAGES', 'MANAGE_MESSAGES', 'MENTION_EVERYONE']
 }
 
@@ -35,7 +39,6 @@ export function ChannelAccessTab({ serverId }: { serverId?: string }) {
       if (chs[0]) select(chs[0].id)
     }).catch(() => { if (a) setChannels([]) })
     return () => { a = false }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [serverId])
 
   async function select(id: string) {
@@ -76,7 +79,7 @@ export function ChannelAccessTab({ serverId }: { serverId?: string }) {
     try {
       if (!a.length && !d.length) await api.clearChannelPermission(selId, targetType, targetId)
       else { const saved = await api.setChannelPermission(selId, { targetType, targetId, allow: a, deny: d }); setOws((prev) => prev.map((o) => (o.targetId === targetId ? saved : o))) }
-    } catch { toast.error('Не удалось сохранить доступ'); select(selId) }
+    } catch (e) { toast.error(apiError(e, 'Не удалось сохранить доступ')); select(selId) }
   }
 
   const isPrivate = !!everyone && triOf(everyone.id, 'VIEW_CHANNEL') === 'deny'

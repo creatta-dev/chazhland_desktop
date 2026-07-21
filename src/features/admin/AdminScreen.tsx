@@ -1,9 +1,13 @@
-import { Fragment, useEffect, useState } from 'react'
-import { ChevronLeft, ChevronDown, Lock, Key, X, UserMinus, ArrowLeftRight, Plus, Volume2, Music, AlertTriangle, Copy, Link2, Check, LogOut } from 'lucide-react'
+import { Fragment, useCallback, useEffect, useState } from 'react'
+import { ChevronLeft, ChevronDown, Lock, Key, X, UserMinus, ArrowLeftRight, Plus, Volume2, Music, AlertTriangle, Copy, Link2, Check, LogOut, RotateCw } from 'lucide-react'
 import { api } from '@/lib/api'
 import { toast } from '@/lib/toast'
+import { apiError } from '@/lib/http'
+import { formatDateTime } from '@/lib/format'
+import { PRESENCE_DOT, PRESENCE_LABEL } from '@/lib/presenceLabels'
 import { Avatar, presenceColor } from '@/components/Avatar'
 import { Skeleton } from '@/components/Skeleton'
+import { Switch } from '@/components/ui'
 import { ConfirmModal, ChangeRoleModal, TempPasswordModal } from './modals'
 import { RolesTab } from './RolesTab'
 import { ChannelAccessTab } from './ChannelAccessTab'
@@ -11,11 +15,6 @@ import type { AfkSettings, AuditEntry, InviteCreated, InviteSummary, Member, Ser
 
 type Tab = 'members' | 'roles' | 'channels' | 'invites' | 'server' | 'audit'
 const TAB_LABEL: Record<Tab, string> = { members: 'Участники', roles: 'Роли', channels: 'Каналы', invites: 'Приглашения', server: 'Сервер', audit: 'Аудит' }
-
-function fmtShort(iso: string): string {
-  const d = new Date(iso)
-  return isNaN(d.getTime()) ? iso : d.toLocaleString('ru-RU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })
-}
 
 export function AdminScreen({ serverId, isHome, onClose, onRenamed, onLeft }: {
   serverId?: string
@@ -52,26 +51,37 @@ export function AdminScreen({ serverId, isHome, onClose, onRenamed, onLeft }: {
   )
 }
 
-const STATUS_TXT: Record<string, string> = { online: '● онлайн', idle: '● отошёл', dnd: '● не беспокоить', offline: '○ оффлайн' }
-
 function MembersTab({ serverId, isHome }: { serverId?: string; isHome: boolean }) {
   const [rows, setRows] = useState<Member[] | null>(null)
+  const [loadErr, setLoadErr] = useState<string | null>(null) // раньше промис был без .catch: unhandled rejection и вечная «Загрузка»
   const [kickT, setKickT] = useState<Member | null>(null)
   const [roleT, setRoleT] = useState<Member | null>(null)
   const [resetT, setResetT] = useState<Member | null>(null)
   const [tempPw, setTempPw] = useState<{ name: string; pw: string } | null>(null)
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
-  useEffect(() => { let a = true; api.members(serverId).then((r) => { if (a) setRows(r) }); return () => { a = false } }, [serverId])
+  const load = useCallback(async () => {
+    setLoadErr(null)
+    try { setRows(await api.members(serverId)) }
+    catch (e) { setLoadErr(apiError(e, 'Не удалось загрузить участников')) }
+  }, [serverId])
+  useEffect(() => {
+    let a = true
+    api.members(serverId)
+      .then((r) => { if (a) setRows(r) })
+      .catch((e) => { if (a) setLoadErr(apiError(e, 'Не удалось загрузить участников')) })
+    return () => { a = false }
+  }, [serverId])
   async function toggleSb(m: Member) {
     const dis = !m.soundboardDisabled
     setRows((rs) => (rs ? rs.map((x) => (x.userId === m.userId ? { ...x, soundboardDisabled: dis } : x)) : rs))
     try { await api.setMemberSoundboard(m.userId, dis, serverId); toast.ok(dis ? 'Саундпад выключен участнику' : 'Саундпад включён') }
-    catch {
-      toast.error('Не удалось изменить доступ к саундпаду')
+    catch (e) {
+      toast.error(apiError(e, 'Не удалось изменить доступ к саундпаду'))
       setRows((rs) => (rs ? rs.map((x) => (x.userId === m.userId ? { ...x, soundboardDisabled: !dis } : x)) : rs))
     }
   }
+  if (loadErr) return <LoadError text={loadErr} onRetry={load} />
   if (!rows) return <Loading />
   const cols = '1.7fr 1.1fr .9fr 1fr auto'
   return (
@@ -96,7 +106,7 @@ function MembersTab({ serverId, isHome }: { serverId?: string; isHome: boolean }
               {isOwner
                 ? <span style={{ fontSize: 10, fontWeight: 700, background: 'var(--accent-tint)', color: 'var(--accent)', borderRadius: 6, padding: '3px 9px', width: 'fit-content', display: 'inline-flex', alignItems: 'center', gap: 4 }}>OWNER <Lock size={10} /></span>
                 : <div onClick={() => setRoleT(m)} className="no-drag" style={{ display: 'flex', alignItems: 'center', gap: 6, border: '1px solid var(--border-2)', borderRadius: 9, background: 'var(--win)', padding: '5px 11px', fontSize: 12, width: 'fit-content', cursor: 'pointer' }}>{m.role} <span style={{ color: 'var(--text-3)', display: 'flex' }}><ChevronDown size={13} /></span></div>}
-              <span style={{ color: presenceColor(m.status), fontSize: 13 }}>{STATUS_TXT[m.status]}</span>
+              <span style={{ color: presenceColor(m.status), fontSize: 13 }}>{PRESENCE_DOT[m.status]} {PRESENCE_LABEL[m.status]}</span>
               <span style={{ fontSize: 12.5, color: 'var(--text-3)' }}>{m.joinedAt}</span>
               {isOwner
                 ? <span style={{ color: 'var(--border-2)', fontSize: 15 }}>——</span>
@@ -117,7 +127,7 @@ function MembersTab({ serverId, isHome }: { serverId?: string; isHome: boolean }
           const id = kickT.userId
           setBusy(true); setErr('')
           try { await api.kick(id, serverId); setRows((rs) => (rs ? rs.filter((x) => x.userId !== id) : rs)); setKickT(null) }
-          catch { setErr('Не удалось исключить участника. Попробуйте ещё раз.') }
+          catch (e) { setErr(apiError(e, 'Не удалось исключить участника. Попробуйте ещё раз.')) }
           finally { setBusy(false) }
         }}
         onClose={() => { setKickT(null); setErr('') }} />}
@@ -126,7 +136,7 @@ function MembersTab({ serverId, isHome }: { serverId?: string; isHome: boolean }
           const id = roleT.userId
           setBusy(true); setErr('')
           try { await api.changeRole(id, role, serverId); setRows((rs) => (rs ? rs.map((x) => (x.userId === id ? { ...x, role } : x)) : rs)); setRoleT(null) }
-          catch { setErr('Не удалось изменить роль. Попробуйте ещё раз.') }
+          catch (e) { setErr(apiError(e, 'Не удалось изменить роль. Попробуйте ещё раз.')) }
           finally { setBusy(false) }
         }}
         onClose={() => { setRoleT(null); setErr('') }} />}
@@ -135,7 +145,7 @@ function MembersTab({ serverId, isHome }: { serverId?: string; isHome: boolean }
           const m = resetT
           setBusy(true); setErr('')
           try { const pw = await api.resetMemberPassword(m.userId); setTempPw({ name: m.username, pw }); setResetT(null) }
-          catch { setErr('Не удалось сбросить пароль. Попробуйте ещё раз.') }
+          catch (e) { setErr(apiError(e, 'Не удалось сбросить пароль. Попробуйте ещё раз.')) }
           finally { setBusy(false) }
         }}
         onClose={() => { setResetT(null); setErr('') }} />}
@@ -157,18 +167,19 @@ function renderBold(text: string) {
 
 function AuditTab() {
   const [rows, setRows] = useState<AuditEntry[] | null>(null)
-  const [error, setError] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const load = useCallback(async () => {
+    setError(null)
+    try { setRows(await api.audit()) }
+    catch (e) { setError(apiError(e, 'Не удалось загрузить журнал аудита')); setRows([]) }
+  }, [])
   useEffect(() => {
     let a = true
-    api.audit().then((r) => { if (a) setRows(r) }).catch(() => { if (a) { setError(true); setRows([]) } })
+    api.audit().then((r) => { if (a) setRows(r) }).catch((e) => { if (a) { setError(apiError(e, 'Не удалось загрузить журнал аудита')); setRows([]) } })
     return () => { a = false }
   }, [])
+  if (error) return <LoadError text={error} onRetry={load} />
   if (!rows) return <Loading />
-  if (error) return (
-    <div style={{ animation: 'fadeIn .35s ease', display: 'flex', alignItems: 'center', gap: 9, background: 'var(--danger-tint)', border: '1px solid rgba(224,57,47,.3)', color: 'var(--danger)', borderRadius: 12, padding: '14px 16px', fontSize: 13.5, fontWeight: 600, width: 'fit-content' }}>
-      <AlertTriangle size={16} /> Не удалось загрузить журнал аудита
-    </div>
-  )
   if (rows.length === 0) return (
     <div style={{ animation: 'fadeIn .35s ease' }}>
       <div style={{ fontWeight: 800, fontSize: 24, letterSpacing: '-.02em', marginBottom: 14 }}>Журнал аудита</div>
@@ -201,6 +212,17 @@ function Card({ children }: { children: React.ReactNode }) {
   return <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 16, overflow: 'hidden' }}>{children}</div>
 }
 
+/** Сбой загрузки вкладки: видимая причина (текст с бэка) + повтор — вместо вечных скелетонов. */
+function LoadError({ text, onRetry }: { text: string; onRetry: () => void }) {
+  return (
+    <div style={{ animation: 'fadeIn .35s ease', display: 'flex', alignItems: 'center', gap: 11, background: 'var(--danger-tint)', border: '1px solid rgba(224,57,47,.3)', color: 'var(--danger)', borderRadius: 12, padding: '13px 16px', fontSize: 13.5, fontWeight: 600, width: 'fit-content', maxWidth: '100%' }}>
+      <AlertTriangle size={16} style={{ flex: 'none' }} />
+      <span style={{ minWidth: 0 }}>{text}</span>
+      <button onClick={onRetry} className="pill no-drag" style={{ flex: 'none', display: 'flex', alignItems: 'center', gap: 6, padding: '6px 12px', fontWeight: 600, fontSize: 12.5, color: 'var(--text)' }}><RotateCw size={14} /> Повторить</button>
+    </div>
+  )
+}
+
 function Loading() {
   return (
     <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 16, overflow: 'hidden', animation: 'fadeIn .3s ease' }}>
@@ -219,10 +241,17 @@ function InvitesTab({ serverId }: { serverId?: string }) {
   const [rows, setRows] = useState<InviteSummary[] | null>(null)
   const [created, setCreated] = useState<InviteCreated | null>(null)
   const [busy, setBusy] = useState(false)
+  const [loadErr, setLoadErr] = useState<string | null>(null) // сбой не выдаём за «приглашений нет»
+  const load = useCallback(async () => {
+    if (!serverId) { setRows([]); return }
+    setLoadErr(null)
+    try { setRows(await api.listInvites(serverId)) }
+    catch (e) { setLoadErr(apiError(e, 'Не удалось загрузить приглашения')) }
+  }, [serverId])
   useEffect(() => {
     let a = true
     if (!serverId) { setRows([]); return }
-    api.listInvites(serverId).then((r) => { if (a) setRows(r) }).catch(() => { if (a) setRows([]) })
+    api.listInvites(serverId).then((r) => { if (a) setRows(r) }).catch((e) => { if (a) setLoadErr(apiError(e, 'Не удалось загрузить приглашения')) })
     return () => { a = false }
   }, [serverId])
   async function create() {
@@ -232,14 +261,15 @@ function InvitesTab({ serverId }: { serverId?: string }) {
       const inv = await api.createInvite(serverId)
       setCreated(inv)
       api.listInvites(serverId).then(setRows).catch(() => {})
-    } catch { toast.error('Не удалось создать приглашение — нужно право «Создавать приглашения»') }
+    } catch (e) { toast.error(apiError(e, 'Не удалось создать приглашение — нужно право «Создавать приглашения»')) }
     finally { setBusy(false) }
   }
   async function revoke(id: string) {
     if (!serverId) return
     setRows((rs) => rs?.map((r) => (r.id === id ? { ...r, revoked: true } : r)) ?? rs)
-    try { await api.revokeInvite(serverId, id) } catch { toast.error('Не удалось отозвать'); api.listInvites(serverId).then(setRows).catch(() => {}) }
+    try { await api.revokeInvite(serverId, id) } catch (e) { toast.error(apiError(e, 'Не удалось отозвать приглашение')); api.listInvites(serverId).then(setRows).catch(() => {}) }
   }
+  if (loadErr) return <LoadError text={loadErr} onRetry={load} />
   if (!rows) return <Loading />
   return (
     <div style={{ animation: 'fadeIn .35s ease', maxWidth: 720 }}>
@@ -257,7 +287,7 @@ function InvitesTab({ serverId }: { serverId?: string }) {
               <div style={{ width: 36, height: 36, borderRadius: 11, background: r.revoked ? 'var(--surface-2)' : 'var(--green-tint)', color: r.revoked ? 'var(--text-3)' : 'var(--green)', display: 'flex', alignItems: 'center', justifyContent: 'center', flex: 'none' }}><Link2 size={16} /></div>
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ fontSize: 13.5, fontWeight: 600 }}>{r.revoked ? 'Отозвано' : 'Активно'} · {r.uses}{r.maxUses ? ` / ${r.maxUses}` : ''} использований</div>
-                <div style={{ fontSize: 11.5, color: 'var(--text-3)', marginTop: 2 }}>{r.expiresAt ? `действует до ${fmtShort(r.expiresAt)}` : 'бессрочно'} · создано {fmtShort(r.createdAt)}</div>
+                <div style={{ fontSize: 11.5, color: 'var(--text-3)', marginTop: 2 }}>{r.expiresAt ? `действует до ${formatDateTime(r.expiresAt)}` : 'бессрочно'} · создано {formatDateTime(r.createdAt)}</div>
               </div>
               {!r.revoked && <button onClick={() => revoke(r.id)} className="ib no-drag" title="Отозвать" style={{ width: 30, height: 30, color: 'var(--danger)', flex: 'none' }}><X size={15} /></button>}
             </div>
@@ -290,7 +320,7 @@ function ServerTab({ serverId, onRenamed, onLeft }: { serverId?: string; onRenam
     if (!serverId || !name.trim()) return
     setSaving(true)
     try { const s = await api.renameServer(serverId, name.trim()); onRenamed(s); setName(''); toast.ok('Сервер переименован') }
-    catch { toast.error('Не удалось переименовать — нужно право «Управление сервером»') }
+    catch (e) { toast.error(apiError(e, 'Не удалось переименовать — нужно право «Управлять сервером»')) }
     finally { setSaving(false) }
   }
   return (
@@ -312,7 +342,7 @@ function ServerTab({ serverId, onRenamed, onLeft }: { serverId?: string; onRenam
         <button onClick={() => setLeaveOpen(true)} className="no-drag" style={{ display: 'flex', alignItems: 'center', gap: 9, background: 'var(--danger-tint)', border: '1px solid rgba(224,57,47,.3)', color: 'var(--danger)', borderRadius: 12, padding: '11px 16px', fontSize: 13.5, fontWeight: 600, cursor: 'pointer' }}><LogOut size={16} /> Покинуть сервер</button>
       </div>
       {leaveOpen && <ConfirmModal title="Покинуть сервер" message="Вы выйдете из этого сервера и перестанете видеть его каналы. Владелец выйти не может — сначала передайте владение." confirmLabel="Покинуть" danger busy={leaving}
-        onConfirm={async () => { if (!serverId) return; setLeaving(true); try { await api.leaveServer(serverId); onLeft(serverId) } catch { toast.error('Не удалось выйти (владелец не может покинуть сервер)'); setLeaving(false) } }}
+        onConfirm={async () => { if (!serverId) return; setLeaving(true); try { await api.leaveServer(serverId); onLeft(serverId) } catch (e) { toast.error(apiError(e, 'Не удалось выйти (владелец не может покинуть сервер)')); setLeaving(false) } }}
         onClose={() => setLeaveOpen(false)} />}
     </div>
   )
@@ -340,7 +370,7 @@ function AfkSettingsCard({ serverId }: { serverId?: string }) {
       const r = await api.updateAfkSettings(serverId, p)
       setS(r); setMinutes(Math.max(1, Math.round(r.timeoutSeconds / 60)))
       toast.ok('Настройки AFK сохранены')
-    } catch { toast.error('Не удалось — нужно право «Управление сервером»') }
+    } catch (e) { toast.error(apiError(e, 'Не удалось сохранить настройки AFK — нужно право «Управлять сервером»')) }
     finally { setSaving(false) }
   }
 
@@ -353,10 +383,7 @@ function AfkSettingsCard({ serverId }: { serverId?: string }) {
             <div style={{ fontWeight: 700, fontSize: 14 }}>😴 Авто-AFK</div>
             <div style={{ fontSize: 12.5, color: 'var(--text-3)', marginTop: 3 }}>Неактивных в голосе уводит в AFK-канал с выключенными микро и звуком</div>
           </div>
-          <button onClick={() => apply({ enabled: !s.enabled })} disabled={saving} className="no-drag" title={s.enabled ? 'Выключить' : 'Включить'}
-            style={{ flex: 'none', width: 46, height: 26, borderRadius: 13, border: 'none', cursor: 'pointer', position: 'relative', background: s.enabled ? 'var(--accent)' : 'var(--border-2)', transition: 'background .15s' }}>
-            <span style={{ position: 'absolute', top: 3, left: s.enabled ? 23 : 3, width: 20, height: 20, borderRadius: '50%', background: '#fff', transition: 'left .15s' }} />
-          </button>
+          <Switch checked={s.enabled} onChange={(v) => apply({ enabled: v })} size="lg" disabled={saving} title={s.enabled ? 'Выключить' : 'Включить'} ariaLabel="Авто-AFK" />
         </div>
         {s.enabled && (
           <div style={{ marginTop: 16, display: 'flex', alignItems: 'flex-end', gap: 10 }}>
