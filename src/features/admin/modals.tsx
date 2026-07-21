@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { Modal } from '@/components/Modal'
+import { Button } from '@/components/ui'
 import type { Member, Role } from '@/lib/types'
 
 export function ConfirmModal({ title, message, confirmLabel, danger, onConfirm, onClose, error, busy }: {
@@ -11,7 +12,7 @@ export function ConfirmModal({ title, message, confirmLabel, danger, onConfirm, 
       {error && <div style={{ fontSize: 13, color: 'var(--danger)', background: 'var(--danger-tint)', border: '1px solid rgba(224,57,47,.3)', borderRadius: 10, padding: '9px 12px', marginBottom: 18 }}>{error}</div>}
       <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
         <button className="pill no-drag" onClick={onClose} disabled={busy} style={{ padding: '10px 16px', fontWeight: 600, opacity: busy ? 0.5 : 1 }}>Отмена</button>
-        <button className={(danger ? 'danger-btn' : 'accent-btn') + ' no-drag'} onClick={onConfirm} disabled={busy} style={{ borderRadius: 12, padding: '10px 18px', fontWeight: 700, opacity: busy ? 0.6 : 1 }}>{busy ? '…' : confirmLabel}</button>
+        <Button variant={danger ? 'danger' : 'accent'} onClick={onConfirm} disabled={busy}>{busy ? '…' : confirmLabel}</Button>
       </div>
     </Modal>
   )
@@ -31,7 +32,7 @@ export function TempPasswordModal({ username, password, onClose }: { username: s
         <button type="button" className="pill no-drag" onClick={copy} style={{ flex: 'none', padding: '6px 12px', fontWeight: 600, fontSize: 12.5 }}>{copied ? 'Скопировано' : 'Копировать'}</button>
       </div>
       <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-        <button type="button" className="accent-btn no-drag" onClick={onClose} style={{ borderRadius: 12, padding: '10px 18px', fontWeight: 700 }}>Готово</button>
+        <Button type="button" onClick={onClose}>Готово</Button>
       </div>
     </Modal>
   )
@@ -55,7 +56,7 @@ export function ChangeRoleModal({ member, onSelect, onClose, error, busy }: { me
       {error && <div style={{ fontSize: 13, color: 'var(--danger)', background: 'var(--danger-tint)', border: '1px solid rgba(224,57,47,.3)', borderRadius: 10, padding: '9px 12px', marginBottom: 14 }}>{error}</div>}
       <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
         <button className="pill no-drag" onClick={onClose} disabled={busy} style={{ padding: '10px 16px', fontWeight: 600, opacity: busy ? 0.5 : 1 }}>Отмена</button>
-        <button className="accent-btn no-drag" disabled={busy || sel === member.role} onClick={() => onSelect(sel)} style={{ borderRadius: 12, padding: '10px 18px', fontWeight: 700, opacity: (busy || sel === member.role) ? 0.5 : 1 }}>{busy ? '…' : 'Сохранить'}</button>
+        <Button disabled={busy || sel === member.role} onClick={() => onSelect(sel)}>{busy ? '…' : 'Сохранить'}</Button>
       </div>
     </Modal>
   )

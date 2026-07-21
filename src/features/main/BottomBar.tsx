@@ -5,10 +5,11 @@ import { voice, SCREEN_QUALITY_LABELS, SCREEN_QUALITY_ORDER, type ScreenQuality 
 import { soundboard } from '@/lib/soundboard'
 import { nameStyle } from '@/lib/cosmetics'
 import { toast } from '@/lib/toast'
+import { apiError } from '@/lib/http'
+import { PRESENCE_LABEL } from '@/lib/presenceLabels'
 import type { SoundClip } from '@/lib/api'
 import type { Presence, User } from '@/lib/types'
 
-const STATUS_LABEL: Record<string, string> = { online: 'В сети', idle: 'Не активен', dnd: 'Не беспокоить', offline: 'Не в сети' }
 const STATUS_OPTS: Presence[] = ['online', 'idle', 'dnd']
 
 interface Props {
@@ -64,7 +65,7 @@ export function BottomBar(p: Props) {
               // приоритет: переподключение → в голосовом → статус «о себе» → пресенс-метка (онлайн/отошёл/dnd)
               const reconn = !!p.reconnecting && !!p.voiceChannelName
               const custom = !p.voiceChannelName && !!p.user.statusMessage?.trim()
-              const text = reconn ? 'переподключение…' : (p.voiceChannelName ? `в эфире · ${p.voiceChannelName}` : (p.user.statusMessage?.trim() || STATUS_LABEL[p.status]))
+              const text = reconn ? 'переподключение…' : (p.voiceChannelName ? `в эфире · ${p.voiceChannelName}` : (p.user.statusMessage?.trim() || PRESENCE_LABEL[p.status]))
               return (
                 <div style={{ fontSize: 11.5, color: reconn ? '#e8a33d' : (custom ? 'var(--text-3)' : presenceColor(p.status)), display: 'flex', alignItems: 'center', gap: 5, maxWidth: 168 }}>
                   <span style={{ width: 7, height: 7, borderRadius: '50%', background: presenceColor(p.status), flex: 'none' }} />
@@ -77,7 +78,7 @@ export function BottomBar(p: Props) {
         {statusOpen && (
           <Popover onClose={() => setStatusOpen(false)} style={{ left: '50%', transform: 'translateX(-50%)' }}>
             {STATUS_OPTS.map((s) => (
-              <MenuItem key={s} label={STATUS_LABEL[s]} dot={presenceColor(s)} onClick={() => { setStatusOpen(false); p.onStatus(s) }} active={s === p.status} />
+              <MenuItem key={s} label={PRESENCE_LABEL[s]} dot={presenceColor(s)} onClick={() => { setStatusOpen(false); p.onStatus(s) }} active={s === p.status} />
             ))}
           </Popover>
         )}
@@ -186,11 +187,11 @@ function SoundboardControl({ disabled }: { disabled?: boolean }) {
     if (!pending) return
     setBusy(true)
     try { await soundboard.add(pending, name); setPending(null); setName('') }
-    catch { toast.error('Не удалось добавить звук') }
+    catch (e) { toast.error(apiError(e, 'Не удалось добавить звук')) }
     finally { setBusy(false) }
   }
   async function del(id: string) {
-    try { await soundboard.remove(id) } catch { toast.error('Не удалось удалить') }
+    try { await soundboard.remove(id) } catch (e) { toast.error(apiError(e, 'Не удалось удалить звук')) }
   }
 
   return (

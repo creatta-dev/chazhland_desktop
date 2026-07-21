@@ -27,6 +27,9 @@ import { UpdateModal } from './UpdateModal'
 import { AdminScreen } from '@/features/admin/AdminScreen'
 import { ws } from '@/lib/ws'
 import { toast } from '@/lib/toast'
+import { apiError } from '@/lib/http'
+import { useLatest } from '@/lib/useLatest'
+import { ErrorBoundary } from '@/components/ErrorBoundary'
 import { mentionsUser } from '@/lib/mentions'
 import { sfx } from '@/lib/sfx'
 import { notifyPrefs } from '@/lib/prefs'
@@ -62,8 +65,7 @@ export function MainWindow() {
   const [servers, setServers] = useState<ServerSummary[]>([])
   const [currentServerId, setCurrentServerId] = useState('')
   const [serverActionsOpen, setServerActionsOpen] = useState(false)
-  const currentServerIdRef = useRef(currentServerId)
-  useEffect(() => { currentServerIdRef.current = currentServerId }, [currentServerId])
+  const currentServerIdRef = useLatest(currentServerId)
 
   const [view, setView] = useState<'chat' | 'admin'>('chat')
   const [membersExpanded, setMembersExpanded] = useState(true)
@@ -130,20 +132,17 @@ export function MainWindow() {
     api.members(currentServerIdRef.current).then(setMembers).catch(() => {})
   }, [messages, membersById])
 
-  // актуальный канал для асинхронных колбэков (откат реакции и т.п.), чтобы не затирать чужую ленту
-  const currentIdRef = useRef(currentId)
-  useEffect(() => { currentIdRef.current = currentId }, [currentId])
-  const detachedRef = useRef(detached) // для WS-обработчика: в отсоединённом окне не дописываем live
-  useEffect(() => { detachedRef.current = detached }, [detached])
-  // свежие tree/dms/user для фоновых обработчиков уведомлений (имена каналов/диалогов, ник)
-  const treeRef = useRef(tree); useEffect(() => { treeRef.current = tree }, [tree])
-  const serverChannelsRef = useRef(serverChannels); useEffect(() => { serverChannelsRef.current = serverChannels }, [serverChannels]) // имена каналов ВСЕХ серверов для фоновых уведомлений
-  const dmsRef = useRef(dms); useEffect(() => { dmsRef.current = dms }, [dms])
-  const userRef = useRef(user); useEffect(() => { userRef.current = user }, [user])
-  const statusRef = useRef(status); useEffect(() => { statusRef.current = status }, [status]) // для DND-гейта в фоновых WS-колбэках
-  const notifLevelsRef = useRef(notifLevels); notifLevelsRef.current = notifLevels // свежие уровни уведомлений для фонового хэндлера
+  // Свежие значения для колбэков, живущих дольше рендера (WS-обработчики, таймеры, ответы API):
+  // без них хэндлер читал бы стейт на момент своей регистрации и писал в уже закрытый канал.
+  const currentIdRef = useLatest(currentId)      // актуальный канал (откат реакции и т.п.) — чтобы не затирать чужую ленту
+  const detachedRef = useLatest(detached)        // в отсоединённом окне не дописываем live-сообщения
+  const serverChannelsRef = useLatest(serverChannels) // имена каналов ВСЕХ серверов для фоновых уведомлений
+  const dmsRef = useLatest(dms)                  // имена диалогов там же
+  const userRef = useLatest(user)                // мой ник — для детекта упоминаний
+  const statusRef = useLatest(status)            // DND-гейт в фоновых WS-колбэках
+  const notifLevelsRef = useLatest(notifLevels)  // персональные уровни уведомлений по каналам
+  const messagesRef = useLatest(messages)        // свежие сообщения (звук реакции на своё)
   const autoIdleRef = useRef(false) // авто-idle активен → вернём online при активности (если не сменили статус вручную)
-  const messagesRef = useRef(messages); messagesRef.current = messages // свежие сообщения для WS-колбэков (звук реакции)
 
   // серверо-независимое — один раз: список серверов (рейл), DM, прочитанность, уровни уведомлений
   useEffect(() => {
@@ -382,7 +381,7 @@ export function MainWindow() {
           return [...rs, { channelId: id, lastReadMessageId: null, mentionCount: 1 }]
         })
         if (np.desktop && !quiet) {
-          // имя канала ищем по ВСЕМ серверам (сообщение могло прийти не из открытого), не только treeRef
+          // имя канала ищем по ВСЕМ серверам (сообщение могло прийти не из открытого), не только по дереву текущего
           const findChanName = () => { for (const chs of serverChannelsRef.current.values()) { const c = chs.find((x) => x.id === id); if (c) return c.name } return 'канал' }
           const name = isDm ? (dmsRef.current.find((d) => d.id === id)?.name ?? m.authorName) : findChanName()
           const body = m.content || (m.attachments.length ? 'вложение' : 'новое сообщение')
@@ -393,6 +392,11 @@ export function MainWindow() {
     return () => offs.forEach((off) => off())
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [bgKey])
+
+  // Личные ошибки WS-обработчиков (/user/queue/errors): отказ на watch-control/typing/heartbeat приходит
+  // только автору действия. Без этой подписки 403 «нет прав на управление просмотром» пропадал молча —
+  // кнопка в кинозале просто ничего не делала, и понять почему было нельзя.
+  useEffect(() => ws.onError((e) => toast.error(e.message || 'Сервер отклонил действие')), [])
 
   // клик по нативному уведомлению — фокус окна обеспечивает main; здесь открываем нужный канал
   useEffect(() => {
@@ -450,12 +454,14 @@ export function MainWindow() {
   // если права модератора пропали (понизили роль), пока открыта админ-панель — выкидываем в чат
   useEffect(() => { if (view === 'admin' && !canModerate) setView('chat') }, [view, canModerate])
 
-  function send(text: string, attachments?: AttachmentInput[]) {
-    if (!currentId) return // не отправляем без выбранного канала (иначе /channels//messages → 401)
-    if (!text && !(attachments && attachments.length)) return
+  // Возвращает промис: композер чистит поле только после подтверждения сервера (иначе отвергнутый
+  // текст — слишком длинный, слоумод, потеря сети — исчезал бы безвозвратно). Отказ пробрасываем дальше.
+  function send(text: string, attachments?: AttachmentInput[]): Promise<void> {
+    if (!currentId) return Promise.resolve() // не отправляем без выбранного канала (иначе /channels//messages → 401)
+    if (!text && !(attachments && attachments.length)) return Promise.resolve()
     // дедуп по id: WS-эхо MESSAGE_CREATED могло прийти раньше ответа POST и уже добавить сообщение
     const ch = currentId
-    api.sendMessage(ch, text, replyTo?.id, attachments)
+    const p = api.sendMessage(ch, text, replyTo?.id, attachments)
       .then((m) => {
         if (currentIdRef.current !== ch) return // канал сменился, пока шёл POST — не дописываем в чужую ленту
         // если читали историю (detached) — не дописываем в окно через скрытый разрыв, а возвращаемся
@@ -463,25 +469,26 @@ export function MainWindow() {
         if (detachedRef.current) { jumpToPresent(); return }
         setMessages((ms) => (ms.some((x) => x.id === m.id) ? ms : [...ms, resolveReplyPreview(m, ms)]))
       })
-      .catch(() => toast.error('Не удалось отправить сообщение'))
+      .catch((e) => { toast.error(apiError(e, 'Не удалось отправить сообщение')); throw e })
     setReplyTo(null)
+    return p
   }
   function editMsg(id: string, content: string) {
     const ch = currentId
     const prev = messages.find((m) => m.id === id) // снимок ДО правки — для отката при отказе API
     setMessages((ms) => ms.map((m) => (m.id === id ? { ...m, content, editedAt: new Date().toISOString() } : m)))
-    api.editMessage(id, content).catch(() => {
+    api.editMessage(id, content).catch((e) => {
       if (prev) setMessages((ms) => (currentIdRef.current === ch ? ms.map((m) => (m.id === id ? prev : m)) : ms))
-      toast.error('Не удалось изменить сообщение')
+      toast.error(apiError(e, 'Не удалось изменить сообщение'))
     })
   }
   function deleteMsg(id: string) {
     const ch = currentId
     const prev = messages.find((m) => m.id === id) // снимок ДО удаления — иначе фантомное «удалено» при отказе API
     setMessages((ms) => ms.map((m) => (m.id === id ? { ...m, deleted: true, content: null } : m)))
-    api.deleteMessage(id).catch(() => {
+    api.deleteMessage(id).catch((e) => {
       if (prev) setMessages((ms) => (currentIdRef.current === ch ? ms.map((m) => (m.id === id ? prev : m)) : ms))
-      toast.error('Не удалось удалить сообщение')
+      toast.error(apiError(e, 'Не удалось удалить сообщение'))
     })
   }
   function react(messageId: string, emoji: string) {
@@ -517,7 +524,7 @@ export function MainWindow() {
   }
   function setChannelNotif(channelId: string, level: NotificationLevel) {
     setNotifLevels((m) => new Map(m).set(channelId, level)) // оптимистично
-    api.setChannelNotification(channelId, level).catch(() => toast.error('Не удалось изменить уведомления'))
+    api.setChannelNotification(channelId, level).catch((e) => toast.error(apiError(e, 'Не удалось изменить уведомления')))
   }
   // «пометить непрочитанным отсюда»: ставим lastRead на сообщение ПЕРЕД выбранным (null = с начала канала)
   function markChannelUnreadFrom(beforeMessageId: string | null) {
@@ -564,8 +571,8 @@ export function MainWindow() {
     setMessages((ms) => ms.map((m) => (m.id === id ? { ...m, pinnedAt: pinned ? new Date().toISOString() : null } : m)))
     ;(pinned ? api.pin(id) : api.unpin(id))
       .then(() => setPinsVersion((v) => v + 1))
-      .catch(() => {
-        toast.error(pinned ? 'Не удалось закрепить' : 'Не удалось открепить')
+      .catch((e) => {
+        toast.error(apiError(e, pinned ? 'Не удалось закрепить' : 'Не удалось открепить'))
         api.messages(ch).then((ms) => { if (currentIdRef.current === ch) { setMessages(ms); setDetached(false) } }).catch(() => {})
       })
   }
@@ -585,7 +592,7 @@ export function MainWindow() {
       setHasMore(ctx.hasOlder) // есть ли что грузить вверх (точный флаг, а не «всегда true»)
       setDetached(true)        // окно историческое — live-сообщения копятся, покажем кнопку «к последним»
       setJumpTargetId(m.id)
-    } catch { toast.error('Не удалось перейти к сообщению') }
+    } catch (e) { toast.error(apiError(e, 'Не удалось перейти к сообщению')) }
   }
 
   // вернуться к «хвосту» канала после исторического перехода: грузим последние сообщения
@@ -623,7 +630,7 @@ export function MainWindow() {
       setCurrentId(dm.id)
       setView('chat')
       setPanel(null)
-    } catch { toast.error('Не удалось открыть личные сообщения') }
+    } catch (e) { toast.error(apiError(e, 'Не удалось открыть личные сообщения')) }
   }
 
   function switchServer(id: string) {
@@ -666,8 +673,11 @@ export function MainWindow() {
       <div style={{ flex: 1, minHeight: 0, display: 'flex' }}>
         <GuildRail servers={servers} currentId={currentServerId} badges={serverBadges} onSwitch={switchServer} onAdd={() => setServerActionsOpen(true)} />
         <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
+      {/* тяжёлые разделы под своими границами ошибок: падение одного не должно уносить всё окно */}
       {view === 'admin' && canModerate ? (
-        <AdminScreen serverId={currentServerId} isHome={servers.length > 0 && currentServerId === servers[0]?.id} onClose={() => setView('chat')} onRenamed={onServerRenamed} onLeft={onServerLeft} />
+        <ErrorBoundary label="Админка">
+          <AdminScreen serverId={currentServerId} isHome={servers.length > 0 && currentServerId === servers[0]?.id} onClose={() => setView('chat')} onRenamed={onServerRenamed} onLeft={onServerLeft} />
+        </ErrorBoundary>
       ) : (
         <div style={{ flex: 1, minHeight: 0, display: 'flex' }}>
           <ChannelSidebar
@@ -724,7 +734,7 @@ export function MainWindow() {
             {vs.screenTrack && !screenCollapsed && <ScreenSharePane full={screenFull} onToggleFull={() => setScreenFull((f) => !f)} onCollapse={() => { setScreenCollapsed(true); setScreenFull(false) }} screens={vs.screens} onSelect={(id) => voice.setActiveScreen(id)} nameOf={(uid) => membersById.get(uid)?.username} />}
             {!screenFull && (isWatch ? (
               <div key={`w:${currentId}`} style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', animation: 'fadeIn .26s ease' }}>
-                <WatchView channelId={currentId} />
+                <ErrorBoundary label="Кинозал"><WatchView channelId={currentId} /></ErrorBoundary>
               </div>
             ) : (
               <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', background: 'var(--win)' }}>
@@ -743,9 +753,9 @@ export function MainWindow() {
               </div>
             ))}
             {!screenFull && <MembersRail members={members} roles={roles} ranks={memberRanks} loading={!membersLoaded} expanded={membersExpanded} onToggle={() => setMembersExpanded((v) => !v)} meId={user.id} onOpenDm={openDm} onOpenProfile={setProfileMember} />}
-            {panel === 'stats' && <StatsPanel serverId={currentServerId} onClose={() => setPanel(null)} />}
-            {panel === 'museum' && <MuseumPanel serverId={currentServerId} onClose={() => setPanel(null)} />}
-            {panel === 'achievements' && <AchievementsPanel onClose={() => setPanel(null)} />}
+            {panel === 'stats' && <ErrorBoundary label="Статистика"><StatsPanel serverId={currentServerId} onClose={() => setPanel(null)} /></ErrorBoundary>}
+            {panel === 'museum' && <ErrorBoundary label="Музей цитат"><MuseumPanel serverId={currentServerId} onClose={() => setPanel(null)} /></ErrorBoundary>}
+            {panel === 'achievements' && <ErrorBoundary label="Ачивки"><AchievementsPanel onClose={() => setPanel(null)} /></ErrorBoundary>}
             {(panel === 'search' || panel === 'pins') && currentId && (
               <ChatPanel mode={panel} channelId={currentId} channelName={channel?.name ?? ''} pinsVersion={pinsVersion} onClose={() => setPanel(null)} onUnpin={(id) => pinMsg(id, false)} onJump={jumpTo} />
             )}

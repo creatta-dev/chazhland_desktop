@@ -1,20 +1,16 @@
 import { useEffect, useState } from 'react'
-import { X, BarChart3 } from 'lucide-react'
+import { BarChart3 } from 'lucide-react'
 import { api } from '@/lib/api'
 import { Avatar } from '@/components/Avatar'
 import { useEscape } from '@/lib/useEscape'
 import { Skeleton } from '@/components/Skeleton'
-import type { DigestData, DigestFull, DigestNomination, DigestSummary, DigestUserRef } from '@/lib/types'
+import { formatDayMonth, formatNumber } from '@/lib/format'
+import type { DigestData, DigestFull, DigestNomination, DigestSummary } from '@/lib/types'
+import { SidePanel, SidePanelHeader } from '@/components/ui'
 
-function dmy(iso: string, shiftDays = 0): string {
-  const d = new Date(iso)
-  if (isNaN(d.getTime())) return iso
-  if (shiftDays) d.setDate(d.getDate() + shiftDays)
-  return d.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit' })
-}
 // период [start, end) → подпись start–(end−1день) (последний день недели включительно)
 function periodLabel(s: DigestSummary): string {
-  return `${dmy(s.periodStart)}–${dmy(s.periodEnd, -1)}`
+  return `${formatDayMonth(s.periodStart)}–${formatDayMonth(s.periodEnd, -1)}`
 }
 
 // Боковая панель «Статистика»: история дайджестов сервера + богатый рендер выбранной недели.
@@ -46,12 +42,8 @@ export function StatsPanel({ serverId, onClose }: { serverId: string; onClose: (
   }, [selId, serverId])
 
   return (
-    <div style={{ position: 'absolute', top: 0, right: 0, bottom: 0, width: 380, maxWidth: '100%', zIndex: 40, background: 'var(--surface)', borderLeft: '1px solid var(--border)', boxShadow: '-14px 0 40px -22px var(--shadow)', display: 'flex', flexDirection: 'column', animation: 'ovIn .2s ease' }}>
-      <div style={{ height: 52, flex: 'none', display: 'flex', alignItems: 'center', gap: 9, padding: '0 14px', borderBottom: '1px solid var(--border)' }}>
-        <BarChart3 size={16} style={{ color: 'var(--accent)' }} />
-        <span style={{ fontWeight: 700, fontSize: 14 }}>Статистика · Wrapped</span>
-        <button className="ib no-drag" onClick={onClose} title="Закрыть" style={{ marginLeft: 'auto', width: 30, height: 30, flex: 'none', background: 'var(--surface-2)' }}><X size={15} /></button>
-      </div>
+    <SidePanel>
+      <SidePanelHeader icon={<BarChart3 size={16} style={{ color: 'var(--accent)' }} />} title="Статистика · Wrapped" onClose={onClose} />
 
       {/* селектор недель */}
       {list && list.length > 0 && (
@@ -67,7 +59,7 @@ export function StatsPanel({ serverId, onClose }: { serverId: string; onClose: (
         {!loading && list && list.length === 0 && <Hint text="Дайджестов пока нет. Первый появится в понедельник." />}
         {!loading && full && <DigestCard data={full.data} />}
       </div>
-    </div>
+    </SidePanel>
   )
 }
 
@@ -78,10 +70,10 @@ function DigestCard({ data }: { data: DigestData }) {
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
       {/* цифры недели */}
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 9 }}>
-        <Stat label="Сообщений" value={fmtNum(t.messages)} sub={delta == null ? undefined : `${delta >= 0 ? '+' : ''}${delta}%`} subUp={delta != null && delta >= 0} />
+        <Stat label="Сообщений" value={formatNumber(t.messages)} sub={delta == null ? undefined : `${delta >= 0 ? '+' : ''}${delta}%`} subUp={delta != null && delta >= 0} />
         <Stat label="Активных" value={String(t.activeUsers)} />
-        <Stat label="Реакций" value={fmtNum(t.reactions)} />
-        <Stat label="Минут в войсе" value={fmtNum(t.voiceMinutes)} />
+        <Stat label="Реакций" value={formatNumber(t.reactions)} />
+        <Stat label="Минут в войсе" value={formatNumber(t.voiceMinutes)} />
         {t.newcomers > 0 && <Stat label="Новеньких" value={String(t.newcomers)} />}
         {t.movieNights > 0 && <Stat label="Киноночей" value={String(t.movieNights)} />}
       </div>
@@ -166,7 +158,7 @@ function Nom({ icon, label, nom, unit }: { icon: string; label: string; nom: Dig
         <div style={{ fontSize: 11.5, color: 'var(--text-3)', fontWeight: 600 }}>{label}</div>
         <div style={{ fontSize: 13.5, fontWeight: 700, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{nom.user.username}</div>
       </div>
-      <span style={{ fontSize: 13, fontWeight: 800, color: 'var(--accent)', flex: 'none' }}>{fmtNum(nom.value)} <span style={{ fontWeight: 500, color: 'var(--text-3)', fontSize: 11 }}>{unit}</span></span>
+      <span style={{ fontSize: 13, fontWeight: 800, color: 'var(--accent)', flex: 'none' }}>{formatNumber(nom.value)} <span style={{ fontWeight: 500, color: 'var(--text-3)', fontSize: 11 }}>{unit}</span></span>
     </div>
   )
 }
@@ -195,10 +187,6 @@ function Stat({ label, value, sub, subUp }: { label: string; value: string; sub?
       </div>
     </div>
   )
-}
-
-function fmtNum(n: number): string {
-  return n.toLocaleString('ru-RU')
 }
 
 function CardSkeleton() {

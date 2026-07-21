@@ -6,6 +6,8 @@ import { presence } from '@/lib/presence'
 import { Avatar } from '@/components/Avatar'
 import { toast } from '@/lib/toast'
 import { MOCK } from '@/lib/config'
+import { formatElapsed } from '@/lib/format'
+import { ContextMenu, type ContextMenuItem } from '@/components/ui'
 import { CreateChannelModal } from './CreateChannelModal'
 
 const TYPE_ICON: Record<string, React.ReactNode> = { TEXT: <Hash size={17} />, VOICE: <Volume2 size={17} />, WATCH: <Play size={16} /> }
@@ -13,19 +15,6 @@ const TYPE_ICON: Record<string, React.ReactNode> = { TEXT: <Hash size={17} />, V
 // Унифицированный житель голосового канала. rich=true — мы подключены к этому каналу и знаем
 // живой стейт из LiveKit (говорит/мьют/громкость); rich=false — только членство из presence.
 interface Occupant { userId: string; name: string; avatarUrl: string | null; speaking: boolean; micOn: boolean; deafened: boolean; volume: number; self: boolean; rich: boolean; joinedAt?: string | null }
-
-// Сколько участник сидит в голосовом без выхода (по joinedAt из api.voiceSince).
-function roomTime(joinedAt?: string | null): string | null {
-  if (!joinedAt) return null
-  const t = new Date(joinedAt).getTime()
-  if (isNaN(t)) return null
-  const s = Math.max(0, Math.floor((Date.now() - t) / 1000))
-  const h = Math.floor(s / 3600)
-  const m = Math.floor((s % 3600) / 60)
-  if (h > 0) return `${h}ч ${m}м`
-  if (m > 0) return `${m}м`
-  return '<1м'
-}
 
 // Левый сайдбар каналов в стиле Discord: категории → каналы, под голосовыми — кто там сейчас.
 export function ChannelSidebar({
@@ -89,8 +78,8 @@ export function ChannelSidebar({
     <ChannelRow key={c.id} c={c} rs={rs[c.id]} active={c.id === currentId} connected={c.id === voiceState.channelId} unread={unread.has(c.id)} occupants={occupantsOf(c)} onPick={onPick} onMenu={(e) => { e.preventDefault(); setMenu({ c, x: e.clientX, y: e.clientY }) }} />
   )
 
-  const menuItems = (c: Channel): MenuAction[] => {
-    const items: MenuAction[] = []
+  const menuItems = (c: Channel): ContextMenuItem[] => {
+    const items: ContextMenuItem[] = []
     if (canManage) items.push({ label: 'Изменить канал', icon: <Settings size={15} />, onClick: () => onEditChannel(c) })
     if (c.type !== 'VOICE') items.push({ label: 'Отметить прочитанным', icon: <Check size={15} />, onClick: () => onMarkRead(c) })
     items.push({ label: 'Копировать ссылку', icon: <Link size={15} />, onClick: () => navigator.clipboard?.writeText(`chazhland://channel/${c.id}`).then(() => toast.ok('Ссылка скопирована')).catch(() => {}) })
@@ -147,27 +136,8 @@ export function ChannelSidebar({
       </div>
 
       {createOpen && <CreateChannelModal onCreate={onCreateChannel} onClose={() => setCreateOpen(false)} />}
-      {menu && <ChannelMenu x={menu.x} y={menu.y} items={menuItems(menu.c)} onClose={() => setMenu(null)} />}
+      {menu && <ContextMenu x={menu.x} y={menu.y} items={menuItems(menu.c)} onClose={() => setMenu(null)} layer="menuTop" />}
     </aside>
-  )
-}
-
-interface MenuAction { label: string; icon?: React.ReactNode; danger?: boolean; header?: boolean; onClick?: () => void }
-function ChannelMenu({ x, y, items, onClose }: { x: number; y: number; items: MenuAction[]; onClose: () => void }) {
-  const top = Math.min(y, window.innerHeight - (items.length * 36 + 24)) // не вылезать за нижний край
-  return (
-    <>
-      <div onClick={onClose} onContextMenu={(e) => { e.preventDefault(); onClose() }} style={{ position: 'fixed', inset: 0, zIndex: 60 }} />
-      <div style={{ position: 'fixed', left: x, top, zIndex: 61, minWidth: 196, background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 10, boxShadow: '0 18px 40px -16px var(--shadow)', padding: 5 }}>
-        {items.map((it, i) => it.header ? (
-          <div key={i} style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: '.06em', color: 'var(--text-3)', textTransform: 'uppercase', padding: '8px 10px 4px', borderTop: i > 0 ? '1px solid var(--border)' : undefined, marginTop: i > 0 ? 4 : 0 }}>{it.label}</div>
-        ) : (
-          <button key={i} className="chan-row no-drag" onClick={() => { onClose(); it.onClick?.() }} style={{ display: 'flex', alignItems: 'center', gap: 9, width: '100%', textAlign: 'left', borderRadius: 7, padding: '8px 10px', fontSize: 13, fontWeight: 500, color: it.danger ? 'var(--danger)' : 'var(--text)' }}>
-            {it.icon && <span style={{ display: 'flex', color: it.danger ? 'var(--danger)' : 'var(--text-3)' }}>{it.icon}</span>}{it.label}
-          </button>
-        ))}
-      </div>
-    </>
   )
 }
 
@@ -203,7 +173,7 @@ function OccupantRow({ o }: { o: Occupant }) {
           {o.name}{o.self && ' (вы)'}
         </span>
         <span style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 5, flex: 'none' }}>
-          {roomTime(o.joinedAt) && <span title="В голосовом без выхода" style={{ fontSize: 10.5, fontWeight: 700, color: 'var(--text-3)', fontVariantNumeric: 'tabular-nums' }}>{roomTime(o.joinedAt)}</span>}
+          {formatElapsed(o.joinedAt) && <span title="В голосовом без выхода" style={{ fontSize: 10.5, fontWeight: 700, color: 'var(--text-3)', fontVariantNumeric: 'tabular-nums' }}>{formatElapsed(o.joinedAt)}</span>}
           {o.rich && o.deafened && <span style={{ color: 'var(--danger)', display: 'flex' }} title="Звук выключен"><HeadphoneOff size={12} /></span>}
           {o.rich && !o.micOn && <span style={{ color: 'var(--danger)', display: 'flex' }} title="Микрофон выключен"><MicOff size={12} /></span>}
           {o.rich && !o.self && (

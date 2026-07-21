@@ -8,10 +8,9 @@ import { presence } from '@/lib/presence'
 import { MOCK } from '@/lib/config'
 import { nameStyle } from '@/lib/cosmetics'
 import { roleColor, highestRole } from '@/lib/roles'
+import { PRESENCE_LABEL } from '@/lib/presenceLabels'
 import { hexA } from '@/theme/themes'
 import type { Member, MemberRank, Presence, ServerRole } from '@/lib/types'
-
-const SUB: Record<string, string> = { online: 'в сети', idle: 'отошёл', dnd: 'не беспокоить', offline: 'не в сети' }
 
 export function MembersRail({ members, roles = [], ranks, loading, expanded, onToggle, meId, onOpenDm, onOpenProfile }: {
   members: Member[]
@@ -73,7 +72,7 @@ function Row({ m, status, roles, rank, expanded, dim, self, onOpenDm, onOpenProf
           <div style={{ lineHeight: 1.2, minWidth: 0 }}>
             <div style={{ fontWeight: 600, fontSize: 13.5, color: color || undefined, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', ...(nameStyle(rank?.equipped?.nameEffect) ?? {}) }}>{m.username}</div>
             {/* кастомный статус «о себе» приоритетнее метки присутствия (если бэк его отдаёт) */}
-            <div style={{ fontSize: 11, color: m.statusMessage?.trim() ? 'var(--text-3)' : presenceColor(status), whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={m.statusMessage?.trim() || undefined}>{m.statusMessage?.trim() || SUB[status]}</div>
+            <div style={{ fontSize: 11, color: m.statusMessage?.trim() ? 'var(--text-3)' : presenceColor(status), whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={m.statusMessage?.trim() || undefined}>{m.statusMessage?.trim() || PRESENCE_LABEL[status]}</div>
           </div>
           {/* справа: ранг-чип + бейдж роли/корона */}
           <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 4, flex: 'none' }}>

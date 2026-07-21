@@ -4,12 +4,9 @@ import { api } from '@/lib/api'
 import { Avatar } from '@/components/Avatar'
 import { useEscape } from '@/lib/useEscape'
 import { Skeleton } from '@/components/Skeleton'
+import { formatDateTime } from '@/lib/format'
 import type { Message } from '@/lib/types'
-
-function when(iso: string) {
-  const d = new Date(iso)
-  return isNaN(d.getTime()) ? iso : d.toLocaleString('ru-RU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })
-}
+import { SidePanel, SidePanelHeader } from '@/components/ui'
 
 // Боковая панель поиска и закреплённых сообщений (оверлей справа над лентой).
 export function ChatPanel({ mode, channelId, channelName, pinsVersion, onClose, onUnpin, onJump }: {
@@ -47,13 +44,14 @@ export function ChatPanel({ mode, channelId, channelName, pinsVersion, onClose, 
   }, [mode, channelId, q])
 
   return (
-    <div style={{ position: 'absolute', top: 0, right: 0, bottom: 0, width: 360, maxWidth: '100%', zIndex: 40, background: 'var(--surface)', borderLeft: '1px solid var(--border)', boxShadow: '-14px 0 40px -22px var(--shadow)', display: 'flex', flexDirection: 'column', animation: 'ovIn .2s ease' }}>
-      <div style={{ height: 52, flex: 'none', display: 'flex', alignItems: 'center', gap: 9, padding: '0 14px', borderBottom: '1px solid var(--border)' }}>
-        {mode === 'pins' ? <Pin size={16} style={{ color: 'var(--accent)' }} /> : <Search size={16} style={{ color: 'var(--text-3)' }} />}
-        <span style={{ fontWeight: 700, fontSize: 14 }}>{mode === 'pins' ? 'Закреплённые' : 'Поиск'}</span>
+    <SidePanel>
+      <SidePanelHeader
+        icon={mode === 'pins' ? <Pin size={16} style={{ color: 'var(--accent)' }} /> : <Search size={16} style={{ color: 'var(--text-3)' }} />}
+        title={mode === 'pins' ? 'Закреплённые' : 'Поиск'}
+        onClose={onClose}
+      >
         <span style={{ fontSize: 12, color: 'var(--text-3)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>#{channelName}</span>
-        <button className="ib no-drag" onClick={onClose} title="Закрыть" style={{ marginLeft: 'auto', width: 30, height: 30, flex: 'none', background: 'var(--surface-2)' }}><X size={15} /></button>
-      </div>
+      </SidePanelHeader>
 
       {mode === 'search' && (
         <div style={{ padding: '12px 14px', flex: 'none' }}>
@@ -84,7 +82,7 @@ export function ChatPanel({ mode, channelId, channelName, pinsVersion, onClose, 
             <div style={{ minWidth: 0, flex: 1 }}>
               <div style={{ display: 'flex', alignItems: 'baseline', gap: 7 }}>
                 <span style={{ fontWeight: 700, fontSize: 13 }}>{m.authorName}</span>
-                <span style={{ fontSize: 11, color: 'var(--text-3)' }}>{when(m.createdAt)}</span>
+                <span style={{ fontSize: 11, color: 'var(--text-3)' }}>{formatDateTime(m.createdAt)}</span>
               </div>
               <div style={{ fontSize: 13, color: 'var(--text-2)', lineHeight: 1.45, wordBreak: 'break-word' }}>{m.content || (m.attachments.length ? 'вложение' : '—')}</div>
             </div>
@@ -94,7 +92,7 @@ export function ChatPanel({ mode, channelId, channelName, pinsVersion, onClose, 
           </div>
         ))}
       </div>
-    </div>
+    </SidePanel>
   )
 }
 

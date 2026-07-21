@@ -1,6 +1,8 @@
 import { useState } from 'react'
 import { Modal } from '@/components/Modal'
+import { Button } from '@/components/ui'
 import { toast } from '@/lib/toast'
+import { apiError } from '@/lib/http'
 import { api } from '@/lib/api'
 import type { ServerSummary } from '@/lib/types'
 
@@ -24,8 +26,8 @@ export function ServerActionsModal({ onClose, onDone }: {
       toast.ok(mode === 'create' ? 'Сервер создан' : `Вы вступили в «${s.name}»`)
       onDone(s)
       onClose()
-    } catch {
-      toast.error(mode === 'create' ? 'Не удалось создать сервер' : 'Не удалось вступить — проверьте код')
+    } catch (e) {
+      toast.error(apiError(e, mode === 'create' ? 'Не удалось создать сервер' : 'Не удалось вступить — проверьте код'))
     } finally {
       setLoading(false)
     }
@@ -50,9 +52,9 @@ export function ServerActionsModal({ onClose, onDone }: {
       </div>
       <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
         <button className="pill no-drag" onClick={onClose} style={{ padding: '10px 16px', fontWeight: 600 }}>Отмена</button>
-        <button className="accent-btn no-drag" disabled={loading || !value.trim()} onClick={submit} style={{ borderRadius: 12, padding: '10px 18px', fontWeight: 700, opacity: !value.trim() ? 0.5 : 1 }}>
+        <Button disabled={loading || !value.trim()} onClick={submit} style={{ opacity: !value.trim() ? 0.5 : 1 }}>
           {loading ? '…' : mode === 'create' ? 'Создать' : 'Вступить'}
-        </button>
+        </Button>
       </div>
     </Modal>
   )

@@ -1,7 +1,9 @@
 import { useState } from 'react'
 import { Trash2 } from 'lucide-react'
 import { Modal } from '@/components/Modal'
+import { Button } from '@/components/ui'
 import { toast } from '@/lib/toast'
+import { apiError } from '@/lib/http'
 import type { Channel } from '@/lib/types'
 
 const lbl: React.CSSProperties = { fontSize: 12.5, fontWeight: 600, color: 'var(--text-2)', display: 'block', marginBottom: 6 }
@@ -44,11 +46,11 @@ export function ChannelSettingsModal({ channel, onClose, onSaved, onDeleted }: {
         slowModeSeconds: isText ? slow : (channel.slowModeSeconds ?? 0),
       })
       onClose()
-    } catch { toast.error('Не удалось сохранить канал'); setBusy(false) }
+    } catch (e) { toast.error(apiError(e, 'Не удалось сохранить канал')); setBusy(false) }
   }
   async function del() {
     setBusy(true)
-    try { await onDeleted(); onClose() } catch { toast.error('Не удалось удалить канал'); setBusy(false) }
+    try { await onDeleted(); onClose() } catch (e) { toast.error(apiError(e, 'Не удалось удалить канал')); setBusy(false) }
   }
 
   return (
@@ -80,7 +82,7 @@ export function ChannelSettingsModal({ channel, onClose, onSaved, onDeleted }: {
       )}
 
       <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 6 }}>
-        <button type="button" className="accent-btn no-drag" disabled={busy} onClick={save} style={{ borderRadius: 11, padding: '9px 18px', fontWeight: 700, opacity: busy ? 0.55 : 1 }}>{busy ? 'Сохранение…' : 'Сохранить'}</button>
+        <Button type="button" size="sm" disabled={busy} onClick={save}>{busy ? 'Сохранение…' : 'Сохранить'}</Button>
       </div>
 
       <div style={{ height: 1, background: 'var(--border)', margin: '16px 0' }} />

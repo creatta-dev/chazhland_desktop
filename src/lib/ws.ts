@@ -3,6 +3,8 @@ import { MOCK, WS_URL } from './config'
 import type { AchievementEvent, AfkEvent, QuorumEvent, RankEvent, WatchAction, WatchState } from './types'
 
 export interface WsEvent { type: string; channelId?: string; message?: unknown; userId?: string; username?: string; messageId?: string; emoji?: string }
+/** Ответ бэка на отказ в @MessageMapping-обработчике (ws/WsError.java): статус + человеческий текст. */
+export interface WsErrorEvent { status: number; message: string }
 export type WsStatus = 'online' | 'connecting'
 
 interface Spec { topic: string; cb: (body: any) => void; sub: StompSubscription | null }
@@ -100,10 +102,15 @@ class Ws {
     this.client.publish({ destination: `/app/watch.${channelId}.control`, body: JSON.stringify({ action, positionSeconds }) })
   }
 
-  /** Presence (легаси-общий): /topic/presence. */
-  onPresence(cb: (e: any) => void): () => void {
-    return this.subscribeTopic('/topic/presence', cb)
+  /**
+   * Личные ошибки WS-обработчиков: /user/queue/errors (бэк — WsExceptionHandler + @SendToUser).
+   * Сюда приходят отказы на watch-control/typing/heartbeat — без подписки 403 «нет прав на управление
+   * просмотром» терялся молча: кнопка просто ничего не делала. Адрес — StompDestinations.USER_ERRORS.
+   */
+  onError(cb: (e: WsErrorEvent) => void): () => void {
+    return this.subscribeTopic('/user/queue/errors', cb as (b: any) => void)
   }
+
   /** Presence КОНКРЕТНОГО сервера: /topic/server.{id}.presence (изоляция между серверами). */
   onServerPresence(serverId: string, cb: (e: any) => void): () => void {
     return this.subscribeTopic(`/topic/server.${serverId}.presence`, cb)

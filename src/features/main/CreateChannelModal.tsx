@@ -1,7 +1,9 @@
 import { useState } from 'react'
 import { Hash, Volume2, Play } from 'lucide-react'
 import { Modal } from '@/components/Modal'
+import { Button } from '@/components/ui'
 import { toast } from '@/lib/toast'
+import { apiError } from '@/lib/http'
 import type { ChannelType } from '@/lib/types'
 
 const TYPES: { type: ChannelType; icon: React.ReactNode; label: string; desc: string }[] = [
@@ -22,7 +24,7 @@ export function CreateChannelModal({ onCreate, onClose }: {
     const n = name.trim()
     if (!n) return
     setLoading(true)
-    try { await onCreate({ name: n, type }); toast.ok('Канал создан'); onClose() } catch { toast.error('Не удалось создать канал') } finally { setLoading(false) }
+    try { await onCreate({ name: n, type }); toast.ok('Канал создан'); onClose() } catch (e) { toast.error(apiError(e, 'Не удалось создать канал')) } finally { setLoading(false) }
   }
 
   return (
@@ -43,7 +45,7 @@ export function CreateChannelModal({ onCreate, onClose }: {
       </div>
       <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
         <button className="pill no-drag" onClick={onClose} style={{ padding: '10px 16px', fontWeight: 600 }}>Отмена</button>
-        <button className="accent-btn no-drag" disabled={loading || !name.trim()} onClick={submit} style={{ borderRadius: 12, padding: '10px 18px', fontWeight: 700, opacity: !name.trim() ? 0.5 : 1 }}>{loading ? 'Создаём…' : 'Создать'}</button>
+        <Button disabled={loading || !name.trim()} onClick={submit} style={{ opacity: !name.trim() ? 0.5 : 1 }}>{loading ? 'Создаём…' : 'Создать'}</Button>
       </div>
     </Modal>
   )

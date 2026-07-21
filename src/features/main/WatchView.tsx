@@ -3,18 +3,11 @@ import { Film, Link2, Loader2, MonitorPlay, Search, X } from 'lucide-react'
 import { api } from '@/lib/api'
 import { ws } from '@/lib/ws'
 import { toast } from '@/lib/toast'
-import { HttpError } from '@/lib/http'
+import { HttpError, apiError } from '@/lib/http'
+import { formatWatchSize } from '@/lib/format'
 import { sfx } from '@/lib/sfx'
 import type { WatchAction, WatchState, WatchSourceKind, WatchSearchResult } from '@/lib/types'
 
-function srvMsg(e: HttpError): string | null {
-  try { const j = JSON.parse(e.body); return typeof j?.message === 'string' ? j.message : null } catch { return null }
-}
-function fmtSize(n: number): string {
-  if (!n) return '—'
-  const gb = n / 1073741824
-  return gb >= 1 ? `${gb.toFixed(2)} ГБ` : `${(n / 1048576).toFixed(0)} МБ`
-}
 // page-хосты, которые резолвит yt-dlp (зеркалит backend SsrfGuard.link-allowed-hosts) → kind=LINK
 function isLinkHost(text: string): boolean {
   try {
@@ -257,7 +250,7 @@ export function WatchView({ channelId }: { channelId: string }) {
     else if (/^[0-9a-fA-F]{40}$/.test(text) || /^[A-Za-z2-7]{32}$/.test(text)) req = { kind: 'TORRENT', infoHash: text }
     else if (isLinkHost(text)) req = { kind: 'LINK', url: text }
     else req = { kind: 'DIRECT', url: text }
-    try { await apply(await api.setWatchSource(channelId, req)) } catch { toast.error('Не удалось загрузить источник') }
+    try { await apply(await api.setWatchSource(channelId, req)) } catch (e) { toast.error(apiError(e, 'Не удалось загрузить источник')) }
   }
 
   async function runSearch() {
@@ -270,7 +263,7 @@ export function WatchView({ channelId }: { channelId: string }) {
       if (e instanceof HttpError) {
         if (e.status === 503) setSearchErr('Поиск временно недоступен — трекеры на сервере не настроены. Можно вставить magnet вручную.')
         else if (e.status === 403) setSearchErr('Нет прав на управление просмотром в этом канале.')
-        else setSearchErr(srvMsg(e) ?? `Ошибка поиска (${e.status})`)
+        else setSearchErr(apiError(e, `Ошибка поиска (${e.status})`))
       } else setSearchErr('Не удалось связаться с сервером.')
     } finally { setSearching(false) }
   }
@@ -284,7 +277,7 @@ export function WatchView({ channelId }: { channelId: string }) {
     if (!req) { toast.error('У релиза нет magnet/infoHash'); return }
     setSearchOpen(false)
     try { await apply(await api.setWatchSource(channelId, req)) }
-    catch (e) { toast.error(e instanceof HttpError ? (srvMsg(e) ?? 'Не удалось загрузить источник') : 'Не удалось загрузить источник') }
+    catch (e) { toast.error(apiError(e, 'Не удалось загрузить источник')) }
   }
 
   function stop() {
@@ -397,7 +390,7 @@ export function WatchView({ channelId }: { channelId: string }) {
                   <div style={{ minWidth: 0, flex: 1 }}>
                     <div style={{ fontSize: 13.5, fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{r.title}</div>
                     <div style={{ fontSize: 11.5, color: '#8a847a', marginTop: 2, display: 'flex', gap: 12, flexWrap: 'wrap' }}>
-                      <span>{fmtSize(r.sizeBytes)}</span>
+                      <span>{formatWatchSize(r.sizeBytes)}</span>
                       <span style={{ color: r.seeders > 0 ? '#5cbf86' : '#8a847a' }}>↑ {r.seeders}</span>
                       <span>↓ {r.leechers}</span>
                       <span>{r.indexer}</span>

@@ -1,15 +1,12 @@
 import { useEffect, useState } from 'react'
-import { X, Trophy } from 'lucide-react'
+import { Trophy } from 'lucide-react'
 import { api } from '@/lib/api'
 import { Avatar } from '@/components/Avatar'
 import { useEscape } from '@/lib/useEscape'
 import { Skeleton } from '@/components/Skeleton'
+import { formatShortDate } from '@/lib/format'
 import type { QuoteKind, QuoteMuseumEntry } from '@/lib/types'
-
-function dt(iso: string): string {
-  const d = new Date(iso)
-  return isNaN(d.getTime()) ? iso : d.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: '2-digit' })
-}
+import { SidePanel, SidePanelHeader } from '@/components/ui'
 
 const FILTERS: { key: QuoteKind | 'ALL'; label: string }[] = [
   { key: 'ALL', label: 'Всё' },
@@ -33,12 +30,8 @@ export function MuseumPanel({ serverId, onClose }: { serverId: string; onClose: 
   }, [serverId, kind])
 
   return (
-    <div style={{ position: 'absolute', top: 0, right: 0, bottom: 0, width: 380, maxWidth: '100%', zIndex: 40, background: 'var(--surface)', borderLeft: '1px solid var(--border)', boxShadow: '-14px 0 40px -22px var(--shadow)', display: 'flex', flexDirection: 'column', animation: 'ovIn .2s ease' }}>
-      <div style={{ height: 52, flex: 'none', display: 'flex', alignItems: 'center', gap: 9, padding: '0 14px', borderBottom: '1px solid var(--border)' }}>
-        <Trophy size={16} style={{ color: 'var(--accent)' }} />
-        <span style={{ fontWeight: 700, fontSize: 14 }}>Музей цитат</span>
-        <button className="ib no-drag" onClick={onClose} title="Закрыть" style={{ marginLeft: 'auto', width: 30, height: 30, flex: 'none', background: 'var(--surface-2)' }}><X size={15} /></button>
-      </div>
+    <SidePanel>
+      <SidePanelHeader icon={<Trophy size={16} style={{ color: 'var(--accent)' }} />} title="Музей цитат" onClose={onClose} />
 
       {/* фильтр зала */}
       <div className="no-drag" style={{ flex: 'none', display: 'flex', gap: 7, padding: '11px 14px', borderBottom: '1px solid var(--border)' }}>
@@ -56,7 +49,7 @@ export function MuseumPanel({ serverId, onClose }: { serverId: string; onClose: 
         )}
         {items?.map((e) => <QuoteCard key={e.id} e={e} />)}
       </div>
-    </div>
+    </SidePanel>
   )
 }
 
@@ -66,7 +59,7 @@ function QuoteCard({ e }: { e: QuoteMuseumEntry }) {
     <div style={{ border: '1px solid var(--border)', borderLeft: `3px solid ${gold ? '#e7b53c' : '#b06ad6'}`, borderRadius: 12, padding: '11px 13px', background: 'var(--win)' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8, fontSize: 12.5, fontWeight: 700, color: 'var(--text-2)' }}>
         <span>{gold ? '🏆 Вошло в историю' : '🫠 Карточка стыда'}</span>
-        <span style={{ marginLeft: 'auto', color: 'var(--text-3)', fontWeight: 600 }}>{e.reactionCount} {e.emoji} · {dt(e.inductedAt)}</span>
+        <span style={{ marginLeft: 'auto', color: 'var(--text-3)', fontWeight: 600 }}>{e.reactionCount} {e.emoji} · {formatShortDate(e.inductedAt)}</span>
       </div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
         <Avatar name={e.author.username} src={e.author.avatarUrl} size={22} />

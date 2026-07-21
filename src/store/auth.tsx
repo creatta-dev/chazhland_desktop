@@ -50,7 +50,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       })
       .catch(() => clear())
       .finally(() => setLoading(false))
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   function apply(access: string, refresh: string, user: User) {

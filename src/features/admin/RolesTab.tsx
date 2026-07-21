@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { Plus, Trash2, Shield, Check } from 'lucide-react'
 import { api } from '@/lib/api'
 import { toast } from '@/lib/toast'
+import { apiError } from '@/lib/http'
 import { Avatar } from '@/components/Avatar'
 import { PERMISSIONS, PERM_GROUPS, ROLE_COLORS, DEFAULT_ROLE_COLOR } from '@/lib/permissions'
 import type { Member, Permission, ServerRole } from '@/lib/types'
@@ -31,7 +32,6 @@ export function RolesTab({ serverId }: { serverId?: string }) {
       if (first) select(first)
     }).catch(() => { if (a) setRoles([]) })
     return () => { a = false }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [serverId])
 
   const sel = roles?.find((r) => r.id === selId) ?? null
@@ -56,7 +56,7 @@ export function RolesTab({ serverId }: { serverId?: string }) {
     try {
       const r = await api.createRole({ name: 'Новая роль', color: ROLE_COLORS[0], permissions: ['VIEW_CHANNEL', 'SEND_MESSAGES', 'CONNECT'] }, serverId)
       setRoles((rs) => [...(rs ?? []), r]); select(r)
-    } catch { toast.error('Не удалось создать роль') }
+    } catch (e) { toast.error(apiError(e, 'Не удалось создать роль')) }
     finally { setCreating(false) }
   }
   async function save() {
@@ -66,7 +66,7 @@ export function RolesTab({ serverId }: { serverId?: string }) {
       const updated = await api.updateRole(sel.id, { name: draft.name.trim() || sel.name, color: draft.color, permissions: [...draft.perms] })
       setRoles((rs) => rs!.map((r) => (r.id === updated.id ? updated : r)))
       toast.ok('Роль сохранена')
-    } catch { toast.error('Не удалось сохранить — возможно, не хватает прав') }
+    } catch (e) { toast.error(apiError(e, 'Не удалось сохранить роль — нужно право «Управлять ролями»')) }
     finally { setSaving(false) }
   }
   async function del() {
@@ -76,15 +76,15 @@ export function RolesTab({ serverId }: { serverId?: string }) {
       await api.deleteRole(id)
       setRoles((rs) => { const next = rs!.filter((r) => r.id !== id); const first = sortRoles(next)[0]; if (first) select(first); else { setSelId(null); setDraft(null) }; return next })
       setMembers((ms) => ms.map((m) => ({ ...m, roleIds: m.roleIds?.filter((x) => x !== id) })))
-    } catch { toast.error('Не удалось удалить роль') }
+    } catch (e) { toast.error(apiError(e, 'Не удалось удалить роль')) }
   }
   async function toggleMember(m: Member) {
     if (!sel) return
     const has = !!m.roleIds?.includes(sel.id)
     setMembers((ms) => ms.map((x) => (x.userId === m.userId ? { ...x, roleIds: has ? x.roleIds!.filter((id) => id !== sel.id) : [...(x.roleIds ?? []), sel.id] } : x)))
     try { has ? await api.unassignRole(sel.id, m.userId) : await api.assignRole(sel.id, m.userId) }
-    catch {
-      toast.error('Не удалось изменить назначение')
+    catch (e) {
+      toast.error(apiError(e, 'Не удалось изменить назначение роли'))
       setMembers((ms) => ms.map((x) => (x.userId === m.userId ? { ...x, roleIds: has ? [...(x.roleIds ?? []), sel.id] : x.roleIds!.filter((id) => id !== sel.id) } : x)))
     }
   }

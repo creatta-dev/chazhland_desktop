@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { Mic, Square } from 'lucide-react'
 import { voice, MIC_RMS_FULL, type AudioDevice } from '@/lib/voice'
 import { sfx } from '@/lib/sfx'
+import { Switch } from '@/components/ui'
 
 function keyLabel(code: string) {
   if (code === 'Space') return 'Пробел'
@@ -163,14 +164,7 @@ function Select({ value, onChange, options }: { value: string; onChange: (v: str
   )
 }
 function Toggle({ label, on, onClick }: { label: string; on: boolean; onClick: () => void }) {
-  return (
-    <div onClick={onClick} className="no-drag" style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '7px 0', cursor: 'pointer' }}>
-      <span style={{ width: 38, height: 22, borderRadius: 11, background: on ? 'var(--accent)' : 'var(--border-2)', position: 'relative', transition: 'background .15s', flex: 'none' }}>
-        <span style={{ position: 'absolute', top: 2, left: on ? 18 : 2, width: 18, height: 18, borderRadius: '50%', background: '#fff', transition: 'left .15s' }} />
-      </span>
-      <span style={{ fontSize: 13.5, color: 'var(--text)' }}>{label}</span>
-    </div>
-  )
+  return <Switch checked={on} onChange={onClick} size="sm" label={label} style={{ width: '100%', padding: '7px 0' }} />
 }
 function ModeBtn({ active, onClick, title, desc }: { active: boolean; onClick: () => void; title: string; desc: string }) {
   return (

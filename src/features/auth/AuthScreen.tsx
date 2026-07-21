@@ -3,6 +3,7 @@ import { Eye, EyeOff, AlertTriangle, Check } from 'lucide-react'
 import { useAuth } from '@/store/auth'
 import { api } from '@/lib/api'
 import { HttpError } from '@/lib/http'
+import { Spinner } from '@/components/ui'
 
 function serverMessage(e: HttpError): string | null {
   try {
@@ -199,7 +200,4 @@ function ErrorBox({ text }: { text: string }) {
 }
 function InfoBox({ text }: { text: string }) {
   return <div style={{ display: 'flex', alignItems: 'flex-start', gap: 9, background: 'var(--green-tint)', border: '1px solid rgba(47,170,106,.35)', borderRadius: 12, padding: '11px 13px', marginBottom: 14, fontSize: 13, color: 'var(--green)', fontWeight: 500 }}><Check size={16} style={{ flexShrink: 0, marginTop: 1 }} />{text}</div>
-}
-function Spinner() {
-  return <span style={{ width: 16, height: 16, border: '2.5px solid rgba(255,255,255,.4)', borderTopColor: '#fff', borderRadius: '50%', animation: 'spin .7s linear infinite' }} />
 }

@@ -9,8 +9,11 @@ import { CosmeticBackground } from '@/components/CosmeticBackground'
 import { toast } from '@/lib/toast'
 import { useEscape } from '@/lib/useEscape'
 import { presence } from '@/lib/presence'
+import { PRESENCE_LABEL } from '@/lib/presenceLabels'
+import { formatAttachmentSize, formatNumber, formatTime } from '@/lib/format'
 import { MOCK } from '@/lib/config'
 import { hexA } from '@/theme/themes'
+import { ContextMenu, type ContextMenuItem } from '@/components/ui'
 import { renderRichText } from '@/lib/markdown'
 import { EMOJIS } from '@/lib/emojis'
 import type { Attachment, MemberRank, Message as Msg, Presence, ServerRankInfo } from '@/lib/types'
@@ -26,11 +29,6 @@ async function downloadAttachment(url: string, filename?: string | null) {
     document.body.appendChild(a); a.click(); a.remove()
     setTimeout(() => URL.revokeObjectURL(obj), 1500)
   } catch { toast.error('Не удалось скачать файл') }
-}
-
-function hhmm(iso: string): string {
-  const d = new Date(iso)
-  return isNaN(d.getTime()) ? iso : d.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })
 }
 
 function escapeRegExp(s: string) { return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') }
@@ -134,7 +132,7 @@ export function Message({ m, meId, meName, authorName: authorNameProp, authorAva
   function react(emoji: string) { setPopEmoji(emoji); setPopNonce((n) => n + 1); onReact?.(emoji) }
   function pick(emoji: string) { react(emoji); setPicker(null) }
 
-  const menuItems: MenuItem[] = [
+  const menuItems: ContextMenuItem[] = [
     { label: 'Ответить', icon: <Reply size={15} />, onClick: () => onReply?.(m) },
     ...(m.content ? [{ label: 'Копировать текст', icon: <Copy size={15} />, onClick: () => navigator.clipboard?.writeText(m.content!).then(() => toast.ok('Скопировано')).catch(() => {}) }] : []),
     { label: m.pinnedAt ? 'Открепить' : 'Закрепить', icon: <Pin size={15} />, onClick: () => onPin?.(m.id, !m.pinnedAt) },
@@ -170,7 +168,7 @@ export function Message({ m, meId, meName, authorName: authorNameProp, authorAva
       {picker && <EmojiPicker anchor={picker} onPick={pick} onClose={() => setPicker(null)} />}
 
       {grouped ? (
-        <span style={{ width: 42, flex: 'none', fontSize: 10, color: 'var(--text-3)', textAlign: 'right', paddingTop: 3, opacity: hover ? 1 : 0, transition: 'opacity .12s' }}>{hhmm(m.createdAt)}</span>
+        <span style={{ width: 42, flex: 'none', fontSize: 10, color: 'var(--text-3)', textAlign: 'right', paddingTop: 3, opacity: hover ? 1 : 0, transition: 'opacity .12s' }}>{formatTime(m.createdAt)}</span>
       ) : (
         <span onClick={(e) => setPopover({ x: e.clientX, y: e.clientY })} style={{ flex: 'none', cursor: 'pointer' }} title="Профиль"><Avatar name={authorName} src={authorAvatarUrl} size={42} frame={rank?.equipped?.frame} glow={rank?.equipped?.glow} /></span>
       )}
@@ -184,7 +182,7 @@ export function Message({ m, meId, meName, authorName: authorNameProp, authorAva
             {topRole && <span style={{ fontSize: 10, fontWeight: 700, borderRadius: 5, padding: '1px 7px', background: topRole.color ? hexA(topRole.color, 0.16) : 'var(--surface-3)', color: topRole.color || 'var(--text-2)' }}>{topRole.name}</span>}
             <RankBadge id={rank?.equipped?.badge} size={14} />
             {rank && <RankChip level={rank.level} title={rank.title} compact />}
-            <span style={{ fontSize: 11.5, color: 'var(--text-3)' }}>{hhmm(m.createdAt)}</span>
+            <span style={{ fontSize: 11.5, color: 'var(--text-3)' }}>{formatTime(m.createdAt)}</span>
             {m.pinnedAt && <Pin size={11} style={{ color: 'var(--accent)' }} />}
           </div>
         )}
@@ -246,30 +244,12 @@ export function Message({ m, meId, meName, authorName: authorNameProp, authorAva
           </div>
         )}
       </div>
-      {menu && <MsgMenu x={menu.x} y={menu.y} items={menuItems} onClose={() => setMenu(null)} />}
+      {menu && <ContextMenu x={menu.x} y={menu.y} items={menuItems} onClose={() => setMenu(null)} />}
       {popover && <UserPopover m={m} name={authorName} avatarUrl={authorAvatarUrl} nameColor={nameColor} topRole={topRole} rank={rank} myServerRank={myServerRank} bgUrl={isOwn ? myProfileBgUrl : (rank?.profileBackgroundUrl ?? null)} isOwn={isOwn} x={popover.x} y={popover.y} onOpenDm={onOpenDm} onClose={() => setPopover(null)} />}
     </div>
   )
 }
 
-interface MenuItem { label: string; icon: React.ReactNode; danger?: boolean; onClick: () => void }
-function MsgMenu({ x, y, items, onClose }: { x: number; y: number; items: MenuItem[]; onClose: () => void }) {
-  const top = Math.min(y, window.innerHeight - (items.length * 36 + 20))
-  return (
-    <>
-      <div onClick={onClose} onContextMenu={(e) => { e.preventDefault(); onClose() }} style={{ position: 'fixed', inset: 0, zIndex: 50 }} />
-      <div style={{ position: 'fixed', left: Math.min(x, window.innerWidth - 210), top, zIndex: 51, minWidth: 196, background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 10, boxShadow: '0 18px 40px -16px var(--shadow)', padding: 5 }}>
-        {items.map((it, i) => (
-          <button key={i} className="chan-row no-drag" onClick={() => { onClose(); it.onClick() }} style={{ display: 'flex', alignItems: 'center', gap: 9, width: '100%', textAlign: 'left', borderRadius: 7, padding: '8px 10px', fontSize: 13, fontWeight: 500, color: it.danger ? 'var(--danger)' : 'var(--text)' }}>
-            <span style={{ display: 'flex', color: it.danger ? 'var(--danger)' : 'var(--text-3)' }}>{it.icon}</span>{it.label}
-          </button>
-        ))}
-      </div>
-    </>
-  )
-}
-
-const STATUS_SUB: Record<string, string> = { online: 'в сети', idle: 'отошёл', dnd: 'не беспокоить', offline: 'не в сети' }
 /** XP-полоска текущего уровня в своём мини-профиле (по порогам levelStartXp/nextLevelXp из /me/rank). */
 function XpBar({ sr }: { sr: ServerRankInfo }) {
   const span = Math.max(1, sr.nextLevelXp - sr.levelStartXp)
@@ -280,7 +260,7 @@ function XpBar({ sr }: { sr: ServerRankInfo }) {
     <div style={{ marginTop: 13 }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', fontSize: 11, color: 'var(--text-3)', marginBottom: 5 }}>
         <span style={{ color: c, fontWeight: 700 }}>ур.{sr.level} · {sr.title}</span>
-        <span>{cur.toLocaleString('ru-RU')} / {span.toLocaleString('ru-RU')} XP</span>
+        <span>{formatNumber(cur)} / {formatNumber(span)} XP</span>
       </div>
       <div style={{ height: 7, borderRadius: 99, background: 'var(--surface-3)', overflow: 'hidden' }}>
         <div style={{ width: pct + '%', height: '100%', background: c, transition: 'width .3s' }} />
@@ -310,7 +290,7 @@ function UserPopover({ m, name, avatarUrl, nameColor, topRole, rank, myServerRan
             {rank && <RankChip level={rank.level} title={rank.title} />}
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12.5, color: presenceColor(status), marginTop: 4 }}>
-            <span style={{ width: 8, height: 8, borderRadius: '50%', background: presenceColor(status) }} />{STATUS_SUB[status]}
+            <span style={{ width: 8, height: 8, borderRadius: '50%', background: presenceColor(status) }} />{PRESENCE_LABEL[status]}
           </div>
           {isOwn && myServerRank && <XpBar sr={myServerRank} />}
           {!isOwn && onOpenDm && (
@@ -335,13 +315,6 @@ function EmojiPicker({ anchor, onPick, onClose }: { anchor: 'top' | 'bottom'; on
   )
 }
 
-function fmtBytes(n?: number | null) {
-  if (!n) return ''
-  if (n < 1024) return `${n} Б`
-  if (n < 1024 * 1024) return `${(n / 1024).toFixed(0)} КБ`
-  return `${(n / 1024 / 1024).toFixed(1)} МБ`
-}
-
 function AttachmentView({ a, onOpen }: { a: Attachment; onOpen: () => void }) {
   const isImage = a.contentType.startsWith('image/') && !!a.url
   if (isImage) {
@@ -360,7 +333,7 @@ function AttachmentView({ a, onOpen }: { a: Attachment; onOpen: () => void }) {
       <span style={{ width: 38, height: 38, flex: 'none', borderRadius: 9, background: 'var(--surface-3)', color: 'var(--text-2)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><FileIcon size={18} /></span>
       <span style={{ minWidth: 0, flex: 1 }}>
         <span style={{ display: 'block', fontSize: 13.5, fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{a.filename ?? 'файл'}</span>
-        <span style={{ display: 'block', fontSize: 11.5, color: 'var(--text-3)' }}>{fmtBytes(a.size) || a.contentType}</span>
+        <span style={{ display: 'block', fontSize: 11.5, color: 'var(--text-3)' }}>{formatAttachmentSize(a.size) || a.contentType}</span>
       </span>
       <Download size={16} style={{ color: 'var(--text-3)', flex: 'none' }} />
     </div>
