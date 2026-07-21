@@ -1,4 +1,40 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+/* Inter — из локальных woff2, а не с fonts.googleapis.com: офлайн-приложение не должно ходить
+   в сеть за шрифтом при каждом старте. Подробности и unicode-range — в fonts.css. */
+@import './fonts.css';
+
+/* Статические токены (радиусы / кегли / слои / отступы). Цветовые переменные сюда НЕ кладём —
+   они зависят от темы и проставляются из ThemeProvider. Зеркало этих значений — в themes.ts
+   (RADIUS / FONT / Z / SPACE), оттуда их берут инлайновые стили. ⚠ Правишь тут — правь и там. */
+:root {
+  --radius-xs: 8px;    /* пункты меню, теги, чипы */
+  --radius-sm: 10px;   /* поля ввода, селекты, строки списков */
+  --radius-md: 12px;   /* кнопки, карточки, поповеры */
+  --radius-lg: 14px;   /* крупные карточки, карточка профиля */
+  --radius-xl: 18px;   /* модальные окна */
+  --radius-pill: 999px;/* тумблеры, прогресс-бары, счётчики */
+
+  --font-xs: 11px;     /* микроподписи, заголовки секций капсом */
+  --font-sm: 12px;     /* вторичный текст, счётчики */
+  --font-md: 13px;     /* пункты меню, компактные кнопки */
+  --font-base: 13.5px; /* базовый текст интерфейса */
+  --font-lg: 14px;     /* заголовки панелей, имена пользователей */
+  --font-xl: 16px;     /* заголовки модалок */
+  --font-xxl: 20px;    /* заголовки экранов */
+
+  --z-raised: 2;       /* бейджи поверх соседнего контента */
+  --z-popover: 30;     /* подложка поповеров нижней панели */
+  --z-panel: 40;       /* боковые оверлей-панели */
+  --z-menu: 50;        /* контекстное меню сообщения, карточка профиля */
+  --z-menu-top: 60;    /* контекстное меню канала */
+  --z-modal: 200;      /* модалки, лайтбокс */
+  --z-toast: 9999;     /* тосты */
+
+  --space-xs: 4px;
+  --space-sm: 8px;
+  --space-md: 12px;
+  --space-lg: 16px;
+  --space-xl: 22px;
+}
 
 * { box-sizing: border-box; }
 
@@ -90,6 +126,11 @@ button { font-family: inherit; }
 
 .seg-btn { border: none; cursor: pointer; font-weight: 600; border-radius: 8px; transition: all .2s; background: transparent; color: var(--text-3); }
 .seg-btn.on { background: var(--surface); color: var(--text); }
+
+/* тумблер (components/ui/Switch): видимый фокус с клавиатуры — инлайном :focus-visible не выразить */
+.ui-switch { -webkit-appearance: none; appearance: none; }
+.ui-switch:focus { outline: none; }
+.ui-switch:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: var(--radius-xs); }
 
 .no-drag { -webkit-app-region: no-drag; }
 .drag { -webkit-app-region: drag; }
