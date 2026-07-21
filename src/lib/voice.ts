@@ -1,87 +1,39 @@
-import { Room, RoomEvent, Track, AudioPresets, ScreenSharePresets, DisconnectReason, type RemoteTrack, type RemoteTrackPublication, type RemoteParticipant, type Participant, type LocalAudioTrack, type AudioCaptureOptions, type AudioProcessorOptions, type ScreenShareCaptureOptions, type TrackPublishOptions, type VideoPreset } from 'livekit-client'
+// Фасад голосового модуля: комната LiveKit, микрофон/оглушение, PTT, демонстрация экрана и подписка
+// UI на состояние. Отделяемые куски вынесены в src/lib/voice/*: типы, персистентность настроек,
+// перечисление устройств, опции демонстрации, реестр входящих аудио-элементов, голосовой гейт,
+// монитор «Проверить микрофон». Наружу по-прежнему торчит только `voice` и типы отсюда.
+import { Room, RoomEvent, Track, AudioPresets, DisconnectReason, type RemoteTrack, type RemoteTrackPublication, type RemoteParticipant, type Participant, type LocalAudioTrack, type AudioCaptureOptions } from 'livekit-client'
 import { createMicProcessor, MicProcessor } from './rnnoise'
 import { MOCK } from './config'
 import { api } from './api'
 import { sfx } from './sfx'
 import { soundboard } from './soundboard'
 import { toast } from './toast'
+import { clamp01, type AudioDevice, type ScreenQuality, type ScreenShare, type VoiceMode, type VoiceParticipant, type VoiceSettings, type VoiceState, type VolumeSettings } from './voice/types'
+import { loadSettings, loadVolumes, saveSettings as persistSettings, saveVolumes as persistVolumes } from './voice/settings'
+import { listDevices as enumerateDevices, requestMicPermission as askMicPermission } from './voice/devices'
+import { screenOpts } from './voice/screenShare'
+import { RemoteAudioRegistry, type RemoteAudioKind, type RemoteAudioVolumes } from './voice/audioElements'
+import { MicGate } from './voice/micGate'
+import { MicMonitor } from './voice/micMonitor'
 
-export interface VoiceParticipant { id: string; name: string; speaking: boolean; micOn: boolean; deafened: boolean; volume: number }
-export interface ScreenShare { id: string; track: RemoteTrack; by: string; userId: string }
-export type VoiceMode = 'voice' | 'ptt'
-
-// Качество демонстрации экрана: пресеты LiveKit + «Исходное» (нативное разрешение, высокий битрейт).
-export type ScreenQuality = 'source' | 'q1080' | 'q720' | 'q360'
-const SCREEN_PRESETS: Record<ScreenQuality, VideoPreset> = {
-  source: ScreenSharePresets.original,
-  q1080: ScreenSharePresets.h1080fps30,
-  q720: ScreenSharePresets.h720fps30,
-  q360: ScreenSharePresets.h360fps15,
-}
-export const SCREEN_QUALITY_LABELS: Record<ScreenQuality, string> = {
-  source: 'Исходное', q1080: '1080p · 30', q720: '720p · 30', q360: 'Экономно · 360p',
-}
-export const SCREEN_QUALITY_ORDER: ScreenQuality[] = ['source', 'q1080', 'q720', 'q360']
-// верхняя граница шкалы уровня микрофона (RMS): громкая речь ≈0.15..0.3. Слайдер порога 0..1 и
-// индикатор уровня используют один масштаб, чтобы метка и полоска совпадали визуально.
-export const MIC_RMS_FULL = 0.3
-/** движок шумоподавления, когда оно включено: RNNoise (клиентский нейросетевой) или встроенный браузерный WebRTC-NS */
-export type NoiseSuppressor = 'rnnoise' | 'browser'
-export interface VoiceSettings {
-  inputId: string   // '' = устройство по умолчанию
-  outputId: string  // '' = по умолчанию
-  noiseSuppression: boolean          // мастер: шумоподавление вкл/выкл
-  noiseSuppressor: NoiseSuppressor   // какой движок использовать, когда шумоподавление включено
-  echoCancellation: boolean
-  autoGain: boolean
-  mode: VoiceMode
-  pttKey: string    // KeyboardEvent.code, напр. 'Space'
-  micThreshold: number         // 0..1, порог голосовой активации; 0 = гейт выключен
-  soundboardMuted: boolean     // приглушить саундпад ОТ ДРУГИХ лично у себя
-  screenQuality: ScreenQuality // качество демонстрации экрана
-  screenAudio: boolean         // транслировать системный звук при демонстрации
-  // громкости (множители, 1 = по умолчанию). master — на ВСЕ входящие; остальные — на свою категорию
-  masterVolume: number     // 0..1 — общая громкость всего, что слышу (ПКМ по наушникам)
-  soundboardVolume: number // 0..2 — громкость саундпада у меня (ПКМ по саундпаду)
-  streamVolume: number     // 0..1 — громкость звука просматриваемой демонстрации
-  micVolume: number        // 0..2 — усиление моего микрофона (как «Input Volume»)
-}
-export interface VoiceState {
-  channelId: string | null
-  channelName: string | null
-  connecting: boolean
-  reconnecting: boolean // связь с голосовым сервером потеряна, идёт авто-переподключение
-  micOn: boolean
-  deafened: boolean
-  screenOn: boolean
-  participants: VoiceParticipant[]
-  screenTrack: RemoteTrack | null   // активная (показываемая) демонстрация
-  screenBy: string | null
-  screens: ScreenShare[]            // все идущие демонстрации в канале (для переключения)
-  activeScreenId: string | null
-}
-export interface AudioDevice { id: string; label: string }
-export interface VolumeSettings { master: number; soundboard: number; stream: number; mic: number }
+// публичная поверхность модуля не изменилась: UI по-прежнему берёт всё это из '@/lib/voice'
+export type { AudioDevice, NoiseSuppressor, ScreenQuality, ScreenShare, VoiceMode, VoiceParticipant, VoiceSettings, VoiceState, VolumeSettings } from './voice/types'
+export { MIC_RMS_FULL } from './voice/types'
+export { SCREEN_QUALITY_LABELS, SCREEN_QUALITY_ORDER } from './voice/screenShare'
 
 const INITIAL: VoiceState = {
   channelId: null, channelName: null, connecting: false, reconnecting: false,
   micOn: false, deafened: false, screenOn: false, participants: [], screenTrack: null, screenBy: null,
   screens: [], activeScreenId: null,
 }
-const LS = 'chazh.voice'
-const LS_VOL = 'chazh.voice.vol' // персональная громкость собеседников: identity -> множитель (0..2)
-const DEFAULTS: VoiceSettings = { inputId: '', outputId: '', noiseSuppression: true, noiseSuppressor: 'rnnoise', echoCancellation: true, autoGain: true, mode: 'voice', pttKey: 'Space', micThreshold: 0, soundboardMuted: false, screenQuality: 'q720', screenAudio: false, masterVolume: 1, soundboardVolume: 1, streamVolume: 1, micVolume: 1 }
 // глобальный хоткей тумблера микрофона (работает вне фокуса окна; true hold-PTT недоступен через globalShortcut)
 const MIC_HOTKEY = 'CommandOrControl+Shift+M'
 const SB_TRACK_NAME = 'soundboard' // имя публикуемого аудио-трека саундпада (отличаем на приёмнике от голоса)
 
-const clamp01 = (v: number) => Math.max(0, Math.min(1, v))
-
 class Voice {
   private room: Room | null = null
-  private audioEls = new Map<RemoteTrack, { el: HTMLAudioElement; userId: string }>() // голос собеседников
-  private soundboardEls = new Map<RemoteTrack, HTMLAudioElement>() // входящие треки саундпада (своя громкость/мут)
-  private screenAudioEls = new Map<RemoteTrack, HTMLAudioElement>() // звук чужой демонстрации (своя громкость)
+  private remoteAudio = new RemoteAudioRegistry() // входящий звук: голос собеседников, саундпад, звук демонстрации
   private screenTracks = new Map<RemoteTrack, { userId: string; name: string }>()
   private screenIds = new WeakMap<RemoteTrack, string>() // стабильный id на трек (для выбора активной демонстрации)
   private screenIdSeq = 0
@@ -96,23 +48,13 @@ class Voice {
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null
   private micChain: Promise<void> = Promise.resolve() // очередь операций с микрофоном (анти-гонка)
   private micProcessor: MicProcessor | null = null // активная мик-цепочка (шумодав + gain); null = без обработки
-  // голосовой гейт (порог реагирования микрофона): замеряем уровень с клона трека, публикуемый трек
-  // глушим/открываем через mediaStreamTrack.enabled (дёшево, без пере-согласования)
-  private gateCtx: AudioContext | null = null
-  private gateAnalyser: AnalyserNode | null = null
-  private gateMeasure: MediaStreamTrack | null = null
-  private gateBuf: Float32Array<ArrayBuffer> | null = null
-  private gateRaf: number | null = null
-  private gateHoldUntil = 0
-  // монитор «Проверить микрофон» (слышу себя): отдельный захват → та же обработка → вывод на устройство
-  private monStream: MediaStream | null = null
-  private monProc: MicProcessor | null = null
-  private monEl: HTMLAudioElement | null = null
-  private monCtx: AudioContext | null = null
-  private monRaf: number | null = null
-  private volumes = this.loadVolumes()
+  // голосовой гейт (порог реагирования микрофона) — замер по клону публикуемого трека
+  private gate = new MicGate({ track: () => this.micTrackSource(), threshold: () => this.settings.micThreshold })
+  // монитор «Проверить микрофон» (слышу себя) — независимый тракт, от комнаты не зависит
+  private monitor = new MicMonitor(() => this.settings)
+  private volumes = loadVolumes()
   state: VoiceState = { ...INITIAL }
-  settings: VoiceSettings = this.load()
+  settings: VoiceSettings = loadSettings()
   private cbs = new Set<(s: VoiceState) => void>()
 
   constructor() {
@@ -129,14 +71,8 @@ class Voice {
     }
   }
 
-  private load(): VoiceSettings {
-    try { return { ...DEFAULTS, ...JSON.parse(localStorage.getItem(LS) || '{}') } } catch { return { ...DEFAULTS } }
-  }
-  private saveSettings() { localStorage.setItem(LS, JSON.stringify(this.settings)) }
-  private loadVolumes(): Map<string, number> {
-    try { return new Map(Object.entries(JSON.parse(localStorage.getItem(LS_VOL) || '{}')) as [string, number][]) } catch { return new Map() }
-  }
-  private saveVolumes() { localStorage.setItem(LS_VOL, JSON.stringify(Object.fromEntries(this.volumes))) }
+  private saveSettings() { persistSettings(this.settings) }
+  private saveVolumes() { persistVolumes(this.volumes) }
 
   subscribe(cb: (s: VoiceState) => void): () => void {
     this.cbs.add(cb); cb(this.state)
@@ -229,23 +165,12 @@ class Voice {
       el.autoplay = true
       if (this.settings.outputId && 'setSinkId' in el) (el as any).setSinkId(this.settings.outputId).catch(() => {})
       document.body.appendChild(el)
-      const m = this.settings.masterVolume
-      if (track.source === Track.Source.ScreenShareAudio) {
-        // звук чужой демонстрации экрана — отдельная категория со своей громкостью
-        this.screenAudioEls.set(track, el)
-        el.muted = this.state.deafened
-        el.volume = clamp01(m * this.settings.streamVolume)
-      } else if (pub?.trackName === SB_TRACK_NAME) {
-        // саундпад приходит отдельным аудио-треком
-        this.soundboardEls.set(track, el)
-        el.muted = this.state.deafened || this.settings.soundboardMuted
-        el.volume = clamp01(m * this.settings.soundboardVolume)
-      } else {
-        // обычный голос собеседника
-        this.audioEls.set(track, { el, userId: participant.identity })
-        el.muted = this.state.deafened
-        el.volume = clamp01(m * (this.volumes.get(participant.identity) ?? 1)) // персональная громкость собеседника
-      }
+      // категория входящего звука: звук чужой демонстрации / саундпад (отдельный трек по имени) / голос
+      const kind: RemoteAudioKind = track.source === Track.Source.ScreenShareAudio ? 'screen'
+        : pub?.trackName === SB_TRACK_NAME ? 'soundboard' : 'voice'
+      this.remoteAudio.add(track, el, kind, participant.identity)
+      this.remoteAudio.applyMutes(this.state.deafened, this.settings.soundboardMuted)
+      this.remoteAudio.applyVolumes(this.volumeMultipliers())
     } else if (track.kind === Track.Kind.Video && track.source === Track.Source.ScreenShare) {
       this.screenTracks.set(track, { userId: participant.identity, name: participant.name || '' })
       this.syncScreen()
@@ -254,9 +179,7 @@ class Voice {
   }
   private detach(track: RemoteTrack) {
     track.detach().forEach((el) => el.remove())
-    this.audioEls.delete(track)
-    this.soundboardEls.delete(track)
-    this.screenAudioEls.delete(track)
+    this.remoteAudio.delete(track)
     if (this.screenTracks.delete(track)) this.syncScreen()
     this.refresh()
   }
@@ -333,10 +256,7 @@ class Voice {
 
   // единая точка мута входящего звука: оглушение глушит всё; саундпад дополнительно — по личной настройке
   private applyMutes() {
-    const d = this.state.deafened
-    this.audioEls.forEach((v) => { v.el.muted = d })
-    this.soundboardEls.forEach((el) => { el.muted = d || this.settings.soundboardMuted })
-    this.screenAudioEls.forEach((el) => { el.muted = d })
+    this.remoteAudio.applyMutes(this.state.deafened, this.settings.soundboardMuted)
   }
   setSoundboardMuted(on: boolean) {
     this.settings.soundboardMuted = on
@@ -345,15 +265,18 @@ class Voice {
   }
 
   // ---- громкости («что я слышу») ----
+  private volumeMultipliers(): RemoteAudioVolumes {
+    return {
+      master: this.settings.masterVolume,
+      soundboard: this.settings.soundboardVolume,
+      stream: this.settings.streamVolume,
+      user: (userId) => this.volumes.get(userId) ?? 1, // персональная громкость собеседника
+    }
+  }
   // пересчёт громкости всех управляемых аудио-элементов под текущие настройки (master × категория)
   private applyVolumes() {
-    const m = this.settings.masterVolume
-    this.audioEls.forEach((v) => { v.el.volume = clamp01(m * (this.volumes.get(v.userId) ?? 1)) })
-    const sb = clamp01(m * this.settings.soundboardVolume)
-    this.soundboardEls.forEach((el) => { el.volume = sb })
-    soundboard.setVolume(m * this.settings.soundboardVolume) // локальный микшер своих триггеров (может >1)
-    const sv = clamp01(m * this.settings.streamVolume)
-    this.screenAudioEls.forEach((el) => { el.volume = sv })
+    this.remoteAudio.applyVolumes(this.volumeMultipliers())
+    soundboard.setVolume(this.settings.masterVolume * this.settings.soundboardVolume) // локальный микшер своих триггеров (может >1)
   }
   getVolumeSettings(): VolumeSettings {
     return { master: this.settings.masterVolume, soundboard: this.settings.soundboardVolume, stream: this.settings.streamVolume, mic: this.settings.micVolume }
@@ -390,7 +313,7 @@ class Voice {
       // ВАЖНО: ждём, пока main выставит shareSystemAudio, ДО getDisplayMedia — иначе обработчик
       // setDisplayMediaRequestHandler прочитает старое значение и не подмешает loopback (баг звука демонстрации)
       await window.chazh?.setShareAudio(this.settings.screenAudio) // системный звук отдаёт main (loopback)
-      const { capture, publish } = this.screenOpts()
+      const { capture, publish } = screenOpts(this.settings)
       await room.localParticipant.setScreenShareEnabled(true, capture, publish)
       // пока выбирали источник, пользователь мог остановить/сменить канал — гасим висящий трек
       if (this.screenSeq !== seq || this.room !== room) {
@@ -400,21 +323,6 @@ class Voice {
       this.set({ screenOn: true })
       sfx.screenOn()
     } catch { /* пользователь отменил выбор источника */ }
-  }
-
-  // опции захвата/публикации демонстрации по текущему качеству; для «Исходного» разрешение не
-  // ограничиваем (нативное), для остальных — берём из пресета LiveKit
-  private screenOpts(): { capture: ScreenShareCaptureOptions; publish: TrackPublishOptions } {
-    const preset = SCREEN_PRESETS[this.settings.screenQuality]
-    // системный звук отдаётся через loopback только на Windows (см. main.ts); на macOS getDisplayMedia
-    // его не возвращает — не запрашиваем, иначе constraints просят то, что не будет доставлено
-    const audio = this.settings.screenAudio && window.chazh?.platform === 'win32'
-    const capture: ScreenShareCaptureOptions = {
-      audio,
-      contentHint: 'detail',
-      ...(this.settings.screenQuality === 'source' ? {} : { resolution: preset.resolution }),
-    }
-    return { capture, publish: { videoEncoding: preset.encoding } }
   }
 
   // перезапуск демонстрации с текущими настройками (смена качества/звука на лету; источник
@@ -428,7 +336,7 @@ class Voice {
       // если пока перезапускали — остановили демонстрацию / сменили комнату, НЕ возобновляем (приватность)
       if (this.screenSeq !== seq || this.room !== room || !this.state.screenOn) return
       await window.chazh?.setShareAudio(this.settings.screenAudio) // ждём main до getDisplayMedia (loopback не подмешается раньше времени)
-      const { capture, publish } = this.screenOpts()
+      const { capture, publish } = screenOpts(this.settings)
       await room.localParticipant.setScreenShareEnabled(true, capture, publish)
       if (this.screenSeq !== seq || this.room !== room) { // отменили на финальном шаге — гасим трек
         try { await room.localParticipant.setScreenShareEnabled(false) } catch { /* */ }
@@ -454,78 +362,22 @@ class Voice {
     if (this.room) await this.room.switchActiveDevice('audioinput', id || 'default').catch(() => {})
     // LiveKit сам пере-захватит трек и пересоберёт RNNoise, но клон-замер голос-гейта остался на СТАРОМ
     // (уже остановленном) устройстве → при ненулевом пороге новый мик молчал бы. Пересобираем гейт.
-    if (this.room && this.state.micOn) { this.stopMicGate(false); this.syncMicGate() }
+    if (this.room && this.state.micOn) { this.gate.stop(false); this.syncMicGate() }
   }
 
-  get micMonitorActive(): boolean { return this.monStream != null }
+  get micMonitorActive(): boolean { return this.monitor.active }
 
   // «Проверить микрофон» (слышу себя): отдельный захват → та же обработка, что в звонке (RNNoise по
   // настройке + усиление) → вывод на выбранное устройство. onLevel — живой RMS (0..1 по MIC_RMS_FULL).
-  // Заодно показывает, давит ли шумодав клавиатуру/мышь. Не зависит от того, в звонке ли мы.
   async startMicMonitor(onLevel?: (level: number) => void): Promise<boolean> {
-    this.stopMicMonitor()
-    if (MOCK) return false
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          deviceId: this.settings.inputId ? { exact: this.settings.inputId } : undefined,
-          echoCancellation: this.settings.echoCancellation,
-          autoGainControl: this.settings.autoGain,
-          noiseSuppression: this.browserNsActive(), // как в реальном тракте: браузерный NS только при движке 'browser'
-        },
-      })
-      this.monStream = stream
-      let out = stream.getAudioTracks()[0]
-      if (this.rnnoiseActive() || this.settings.micVolume !== 1) {
-        try {
-          const proc = createMicProcessor({ suppress: this.rnnoiseActive(), gain: this.settings.micVolume })
-          await proc.init({ track: out } as unknown as AudioProcessorOptions) // init читает только opts.track
-          if (proc.processedTrack) { this.monProc = proc; out = proc.processedTrack }
-        } catch { /* RNNoise не поднялся — слышим сырой мик */ }
-      }
-      const el = new Audio()
-      el.srcObject = new MediaStream([out])
-      el.autoplay = true
-      if (this.settings.outputId && 'setSinkId' in el) {
-        await (el as unknown as { setSinkId(id: string): Promise<void> }).setSinkId(this.settings.outputId).catch(() => {})
-      }
-      await el.play().catch(() => {})
-      this.monEl = el
-      if (onLevel) {
-        const Ctor = window.AudioContext || (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext
-        if (Ctor) {
-          const ctx = new Ctor(); if (ctx.state === 'suspended') void ctx.resume()
-          const analyser = ctx.createAnalyser(); analyser.fftSize = 512
-          ctx.createMediaStreamSource(new MediaStream([out])).connect(analyser)
-          const buf = new Float32Array(analyser.fftSize)
-          const loop = () => {
-            analyser.getFloatTimeDomainData(buf)
-            let sum = 0; for (let i = 0; i < buf.length; i++) sum += buf[i] * buf[i]
-            onLevel(Math.min(1, Math.sqrt(sum / buf.length) / MIC_RMS_FULL))
-            this.monRaf = requestAnimationFrame(loop)
-          }
-          this.monCtx = ctx
-          this.monRaf = requestAnimationFrame(loop)
-        }
-      }
-      return true
-    } catch { this.stopMicMonitor(); return false }
+    return this.monitor.start(onLevel)
   }
+  stopMicMonitor() { this.monitor.stop() }
 
-  stopMicMonitor() {
-    if (this.monRaf != null) { cancelAnimationFrame(this.monRaf); this.monRaf = null }
-    if (this.monEl) { try { this.monEl.pause() } catch { /* */ } this.monEl.srcObject = null; this.monEl = null }
-    if (this.monProc) { const p = this.monProc; this.monProc = null; void p.destroy().catch(() => {}) }
-    if (this.monCtx) { try { void this.monCtx.close() } catch { /* */ } this.monCtx = null }
-    if (this.monStream) { this.monStream.getTracks().forEach((t) => t.stop()); this.monStream = null }
-  }
   async setOutputDevice(id: string) {
     this.settings.outputId = id; this.saveSettings()
     if (this.room) await this.room.switchActiveDevice('audiooutput', id || 'default').catch(() => {})
-    const apply = (el: HTMLAudioElement) => { if ('setSinkId' in el) (el as any).setSinkId(id || 'default').catch(() => {}) }
-    this.audioEls.forEach((v) => apply(v.el))
-    this.soundboardEls.forEach(apply)
-    this.screenAudioEls.forEach(apply)
+    this.remoteAudio.applySink(id || 'default')
   }
   async setProcessing(p: Partial<Pick<VoiceSettings, 'noiseSuppression' | 'noiseSuppressor' | 'echoCancellation' | 'autoGain'>>) {
     Object.assign(this.settings, p); this.saveSettings()
@@ -535,7 +387,7 @@ class Voice {
       const track = this.room.localParticipant.getTrackPublication(Track.Source.Microphone)?.track as LocalAudioTrack | undefined
       if (track) await track.restartTrack(this.captureOpts()).catch(() => {})
       await this.refreshMicProcessor() // вкл./выкл. шумодав вслед за тумблером (gain — сохраняем)
-      this.stopMicGate(false); this.syncMicGate() // трек пересоздан — пересобираем клон-замер гейта
+      this.gate.stop(false); this.syncMicGate() // трек пересоздан — пересобираем клон-замер гейта
     }
   }
   async setMode(mode: VoiceMode) {
@@ -581,47 +433,8 @@ class Voice {
   // запустить/остановить гейт под текущее состояние (вызывается из applyMic/setMode/setMicThreshold)
   private syncMicGate() {
     const micOnVoice = !MOCK && !!this.room && this.state.micOn && this.settings.mode === 'voice'
-    if (micOnVoice && this.settings.micThreshold > 0) this.startMicGate()
-    else this.stopMicGate(micOnVoice) // микрофон включён, но гейт выкл → вернуть звук; выключен (мьют) → не трогать enabled
-  }
-  private startMicGate() {
-    if (this.gateRaf != null) return // уже работает
-    const src = this.micTrackSource()
-    if (!src) return
-    try {
-      const Ctor = window.AudioContext || (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext
-      if (!Ctor) return
-      const ctx = new Ctor()
-      if (ctx.state === 'suspended') void ctx.resume() // не на user-gesture-стеке (setMode/reconnect) → иначе замер читает нули
-      const measure = src.clone() // отдельный трек для замера: гашение публикуемого трека его не глушит
-      const analyser = ctx.createAnalyser()
-      analyser.fftSize = 512
-      ctx.createMediaStreamSource(new MediaStream([measure])).connect(analyser)
-      this.gateCtx = ctx; this.gateAnalyser = analyser; this.gateMeasure = measure
-      this.gateBuf = new Float32Array(analyser.fftSize)
-      const HOLD = 250 // мс «дотянуть» после спада уровня — чтобы хвосты слов не обрезались
-      const loop = () => {
-        const a = this.gateAnalyser, buf = this.gateBuf, t = this.micTrackSource()
-        if (!a || !buf || !t) { this.gateRaf = null; return }
-        a.getFloatTimeDomainData(buf)
-        let sum = 0
-        for (let i = 0; i < buf.length; i++) sum += buf[i] * buf[i]
-        const rms = Math.sqrt(sum / buf.length)
-        const now = performance.now()
-        if (rms >= this.settings.micThreshold * MIC_RMS_FULL) this.gateHoldUntil = now + HOLD
-        const open = now < this.gateHoldUntil
-        if (t.enabled !== open) t.enabled = open
-        this.gateRaf = requestAnimationFrame(loop)
-      }
-      this.gateRaf = requestAnimationFrame(loop)
-    } catch { this.stopMicGate(true) }
-  }
-  private stopMicGate(reopen: boolean) {
-    if (this.gateRaf != null) { cancelAnimationFrame(this.gateRaf); this.gateRaf = null }
-    if (this.gateMeasure) { try { this.gateMeasure.stop() } catch { /* */ } this.gateMeasure = null }
-    if (this.gateCtx) { try { void this.gateCtx.close() } catch { /* */ } this.gateCtx = null }
-    this.gateAnalyser = null; this.gateBuf = null
-    if (reopen) { const t = this.micTrackSource(); if (t && !t.enabled) t.enabled = true } // вернуть звук, если гейт его приглушил
+    if (micOnVoice && this.settings.micThreshold > 0) this.gate.start()
+    else this.gate.stop(micOnVoice) // микрофон включён, но гейт выкл → вернуть звук; выключен (мьют) → не трогать enabled
   }
   async setMicThreshold(v: number) {
     this.settings.micThreshold = Math.max(0, Math.min(1, v)); this.saveSettings()
@@ -679,27 +492,9 @@ class Voice {
     if (this.settings.mode === 'ptt') { this.set({ micOn: false }); void this.applyMic(false) }
   }
 
-  // Разблокировка меток устройств: enumerateDevices даёт пустые label без granted-доступа к
-  // микрофону. Берём временный аудио-поток и сразу глушим — нужен только грант, не сам звук.
-  async requestMicPermission(): Promise<boolean> {
-    if (MOCK || typeof navigator === 'undefined' || !navigator.mediaDevices?.getUserMedia) return false
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
-      stream.getTracks().forEach((t) => t.stop())
-      return true
-    } catch { return false }
-  }
-
-  async listDevices(): Promise<{ inputs: AudioDevice[]; outputs: AudioDevice[] }> {
-    if (typeof navigator === 'undefined' || !navigator.mediaDevices) return { inputs: [], outputs: [] }
-    try {
-      const devs = await navigator.mediaDevices.enumerateDevices()
-      return {
-        inputs: devs.filter((d) => d.kind === 'audioinput').map((d) => ({ id: d.deviceId, label: d.label || 'Микрофон' })),
-        outputs: devs.filter((d) => d.kind === 'audiooutput').map((d) => ({ id: d.deviceId, label: d.label || 'Устройство вывода' })),
-      }
-    } catch { return { inputs: [], outputs: [] } }
-  }
+  // ---- устройства (грант доступа и перечисление) ----
+  async requestMicPermission(): Promise<boolean> { return askMicPermission() }
+  async listDevices(): Promise<{ inputs: AudioDevice[]; outputs: AudioDevice[] }> { return enumerateDevices() }
 
   private clearReconnect() {
     if (this.reconnectTimer) { clearTimeout(this.reconnectTimer); this.reconnectTimer = null }
@@ -710,13 +505,11 @@ class Voice {
   // Чистим комнату и, если канал ещё выбран и причина не терминальная, перезаходим со свежим токеном
   // (с бэкоффом и лимитом подряд-попыток, чтобы не зациклиться при kick/duplicate/room-deleted).
   private onDisconnected(reason?: DisconnectReason) {
-    this.stopMicGate(false)
+    this.gate.stop(false)
     this.room = null
     this.micProcessor = null
     window.chazh?.setMicHotkey(null)
-    this.audioEls.forEach((v) => v.el.remove()); this.audioEls.clear()
-    this.soundboardEls.forEach((el) => el.remove()); this.soundboardEls.clear()
-    this.screenAudioEls.forEach((el) => el.remove()); this.screenAudioEls.clear()
+    this.remoteAudio.clear()
     this.screenTracks.clear(); this.activeScreenId = null; this.speaking.clear(); this.pttHeld = false
 
     const target = this.targetId
@@ -748,13 +541,8 @@ class Voice {
     this.set({ ...INITIAL })
   }
   private async teardownRoom() {
-    this.stopMicGate(false)
-    this.audioEls.forEach((v) => v.el.remove())
-    this.audioEls.clear()
-    this.soundboardEls.forEach((el) => el.remove())
-    this.soundboardEls.clear()
-    this.screenAudioEls.forEach((el) => el.remove())
-    this.screenAudioEls.clear()
+    this.gate.stop(false)
+    this.remoteAudio.clear()
     this.screenTracks.clear()
     this.activeScreenId = null
     this.speaking.clear()
