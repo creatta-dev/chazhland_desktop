@@ -143,7 +143,9 @@ export interface Attachment {
   width?: number | null
   height?: number | null
   size?: number | null
-  // thumbnailUrl на бэке всегда null — превью строим по url + width/height (см. бриф)
+  // превью ≤512px, которое бэк строит для JPEG/PNG (service/MediaPostProcessor). Для остальных
+  // типов и старых вложений — null: тогда показываем оригинал по url (+ width/height для вёрстки).
+  thumbnailUrl?: string | null
 }
 
 // ссылка на уже загруженный объект при отправке (бэк: AttachmentInput)
