@@ -9,7 +9,7 @@
 - [Сборка и стек](BUILD.md) — версии, команды сборки, упаковка под Windows.
 - [Просмотр вместе](WATCH-TOGETHER.md) — torrent/mpv-плеер, синхронизация.
 - [Голос](VOICE.md) — LiveKit, шумоподавление, демонстрация экрана.
-- [Контракт бэкенда](BACKEND-CONTRACT.md) — REST/STOMP/LiveKit эндпоинты и DTO.
+- [Контракт бэкенда](BACKEND-CONTRACT.md) — устройство слоя `api.ts`/`http.ts`, где смотреть актуальный контракт (swagger бэка), STOMP-топики и неочевидное.
 
 ---
 
@@ -89,13 +89,15 @@
 | `Message.tsx` | Отрисовка одного сообщения: бейдж автора, реакции, превью ответа, контекстные действия. |
 | `Composer.tsx` | Поле ввода: rich text, эмодзи-пикер, загрузка файлов (drag-drop, до 10 вложений). |
 | `BottomBar.tsx` | Нижняя панель: селектор статуса, кнопки микрофона/глушения/live, счётчик непрочитанного, доступ к admin/настройкам. |
-| `ChannelSwitcher.tsx` | Модалка (нижняя панель или Cmd+K): поиск/создание каналов и DM, ростеры голосовых каналов. |
+| `GuildRail.tsx` | Самая левая колонка: список серверов, создание сервера и вход по инвайту. |
+| `ChannelSidebar.tsx` | Левый сайдбар: категории, каналы, DM, ростеры голосовых каналов; `CreateChannelModal.tsx` / `ChannelSettingsModal.tsx` — создание и правка канала. |
 | `MembersRail.tsx` | Сворачиваемая правая панель: онлайн/офлайн участники, участники голоса. |
-| `ScreenSharePane.tsx` | Просмотр удалённой демонстрации экрана: несколько демонстраций с переключателем, полноэкранный режим. |
-| `VoiceSettingsModal.tsx` | Выбор аудиоустройств, привязка PTT-клавиши, тумблеры шумоподавления/эхоподавления. |
-| `SettingsModal.tsx` | Профиль (имя, статус-сообщение), загрузка аватара, смена пароля. |
+| `ScreenSharePane.tsx` | Просмотр удалённой демонстрации экрана: несколько демонстраций с переключателем, полноэкранный режим; `ScreenPicker.tsx` — выбор источника. |
+| `SettingsModal.tsx` | Вкладочные настройки: профиль и аватар, аудио (`SettingsAudio.tsx` — устройства, PTT-клавиша, шумодав), уведомления, оформление, косметика, безопасность. |
 | `WatchView.tsx` | Синхронный видеоплеер (управление через WebSocket): torrent-стриминг с прогрессом, mpv-фолбэк для экзотических кодеков. |
 | `ChatPanel.tsx` | Вертикальная обёртка чата (область контента канала). |
+| `StatsPanel.tsx`, `MuseumPanel.tsx`, `AchievementsPanel.tsx` | Панели дайджеста «Wrapped», музея цитат и ачивок. |
+| `ProfileModal.tsx`, `ServerActionsModal.tsx`, `UpdateModal.tsx` | Карточка участника, действия с сервером (инвайты/переименование/выход), окно «Что нового» авто-апдейтера. |
 
 #### `src/features/admin/`
 | Файл | Роль |
@@ -111,18 +113,18 @@
 | Файл | Роль |
 |------|------|
 | `http.ts` | Базовый HTTP-клиент: Bearer-авторизация, повтор по 401 с single-flight refresh токена. |
-| `config.ts` | Конфигурация окружения: `VITE_API_BASE`, `VITE_WS_URL`, `VITE_MOCK` (по умолчанию `true`). |
+| `config.ts` | Конфигурация окружения: `VITE_API_BASE`, `VITE_WS_URL`, `VITE_MOCK` (по умолчанию выключен). |
 
 **API и типы**
 | Файл | Роль |
 |------|------|
-| `api.ts` | REST-клиент (auth, messages, members, roles, channels, soundboard, audit). При `VITE_MOCK=true` возвращает данные из `src/mocks/data.ts`. |
+| `api.ts` | REST-клиент и единственное место с путями бэка (auth, серверы и инвайты, каналы, сообщения, участники, роли, саундпад, аудит, ранги/ачивки/дайджесты). При `VITE_MOCK=true` возвращает данные из `src/mocks/data.ts`. Подробнее — [BACKEND-CONTRACT.md](BACKEND-CONTRACT.md). |
 | `types.ts` | DTO-схема: `User`, `Member`, `Channel`, `Message`, `Attachment`, `Role`, `Permission`, `WatchState`, `ChatEvent`. |
 
 **Realtime и состояние**
 | Файл | Роль |
 |------|------|
-| `ws.ts` | STOMP-over-WebSocket клиент (подписки `/topic/channel.*`, `/topic/watch.*`, `/topic/presence`). Подписки переживают reconnect; no-op в mock-режиме. |
+| `ws.ts` | STOMP-over-WebSocket клиент (подписки `/topic/channel.*`, `/topic/watch.*`, `/topic/presence`, серверные `/topic/server.{id}.*` — presence/ранги/кворум/ачивки/AFK). Подписки переживают reconnect; no-op в mock-режиме. |
 | `presence.ts` | Кэш статусов участников (online/idle/dnd/offline) и участников голоса по каналам. Снимок `/presence` + дельты; периодическая ресинхронизация (30 с). |
 
 **Голос и медиа**
@@ -191,8 +193,8 @@ React-стейт компонента ──▶ отрисовка в ChatFeed/M
 ```
 
 Особенности (важно для отладки):
-- Сообщения с эндпоинта `/messages` приходят **newest-first** и разворачиваются
-  на клиенте в хронологический порядок.
+- История канала (`GET /channels/{id}/messages`) приходит **newest-first** и
+  разворачивается на клиенте в хронологический порядок.
 - ID сообщений — **ULID** (лексикографически = хронологически), сортировка по ID
   эквивалентна сортировке по времени.
 - Курсорная пагинация `before={id}` / `after={id}` **исключает** опорное
@@ -334,9 +336,9 @@ START ─▶│  AuthScreen  │ ─── нет ──────│ оста
         ┌──────────────────────────────────────────────────────────────┐
         │ MainWindow                                                     │
         │  ┌──────────┬───────────────────────────┬──────────────────┐  │
-        │  │ (контент)│ ChatPanel/ChatFeed         │ MembersRail      │  │
-        │  │          │  ИЛИ WatchView (WATCH)      │ (сворачиваемая)  │  │
-        │  │          │  ИЛИ ScreenSharePane        │                  │  │
+        │  │ GuildRail│ ChatPanel/ChatFeed         │ MembersRail      │  │
+        │  │ +Channel │  ИЛИ WatchView (WATCH)      │ (сворачиваемая)  │  │
+        │  │  Sidebar │  ИЛИ ScreenSharePane        │                  │  │
         │  ├──────────┴───────────────────────────┴──────────────────┤  │
         │  │ BottomBar: статус · mic/deaf/live · непрочитанное ·       │  │
         │  │            admin (если OWNER/ADMIN) · настройки           │  │
@@ -346,19 +348,19 @@ START ─▶│  AuthScreen  │ ─── нет ──────│ оста
 
 Правила навигации:
 
-- **Выбор канала.** Кнопка в `BottomBar` или **Cmd+K** открывает модалку
-  `ChannelSwitcher`. В ней — поиск по TEXT/VOICE/WATCH/DM, живые ростеры голосовых
-  каналов (через `presence`), кнопка создания канала.
-- **Вложенные модалки.** `ChannelSwitcher` может открыть вложенную
-  `CreateChannelModal`. ESC закрывает сначала внутреннюю модалку, потом внешнюю
-  (см. `src/lib/useEscape.ts`).
+- **Выбор сервера и канала.** Постоянные колонки слева: `GuildRail` (серверы) и
+  `ChannelSidebar` (категории, каналы TEXT/VOICE/WATCH, DM, живые ростеры голосовых
+  каналов через `presence`, кнопка создания канала).
+- **Вложенные модалки.** Из сайдбара открываются `CreateChannelModal` /
+  `ChannelSettingsModal`, из них — вложенные подтверждения. ESC закрывает сначала
+  внутреннюю модалку, потом внешнюю (см. `src/lib/useEscape.ts`).
 - **Admin.** Кнопка-щит в `BottomBar` видна только ролям OWNER/ADMIN и
   переключает `MainWindow` на `AdminScreen` (вкладки Members / Roles / Channels /
   Audit). Это не отдельный маршрут, а состояние вида.
 - **Голос.** Кнопки mic/deaf в `BottomBar` или хоткей (глобальный
   `Cmd/Ctrl+Shift+M`, либо настроенная PTT-клавиша).
-- **Демонстрация экрана.** Кнопка-монитор в `BottomBar`; выбор качества — в
-  `VoiceSettingsModal`.
+- **Демонстрация экрана.** Кнопка-монитор в `BottomBar`; источник выбирается в
+  `ScreenPicker`, качество — в меню той же кнопки (`SCREEN_QUALITY_ORDER`).
 - **Синхронный просмотр.** При выборе канала типа WATCH вместо `ChatFeed`
   показывается `WatchView`.
 
@@ -366,13 +368,14 @@ START ─▶│  AuthScreen  │ ─── нет ──────│ оста
 
 ## 6. Mock-режим
 
-Управляется переменной окружения **`VITE_MOCK`** (по умолчанию `'true'`).
-Предназначен для быстрой итерации и тестирования дизайна без бэкенда.
+Управляется переменной окружения **`VITE_MOCK`** — по умолчанию **выключен**, включается строго
+строкой `'true'` (опечатка или отсутствие переменной = живой бэк; проверка намеренно строгая, однажды
+прод-сборка молча уехала в моки). Предназначен для быстрой итерации и тестирования дизайна без бэкенда.
 
 | `VITE_MOCK` | Поведение |
 |-------------|-----------|
-| `true` (по умолчанию) | Все вызовы `api.*` возвращают данные из `src/mocks/data.ts`. `ws.connect` — no-op, `presence.subscribe` возвращает no-op. Сетевых запросов нет. |
-| `false` | Клиент ходит в живой бэкенд по `VITE_API_BASE` / `VITE_WS_URL`. |
+| `'true'` | Все вызовы `api.*` возвращают данные из `src/mocks/data.ts`. `ws.connect` — no-op, `presence.subscribe` возвращает no-op. Сетевых запросов нет. |
+| любое другое значение (по умолчанию) | Клиент ходит в живой бэкенд по `VITE_API_BASE` / `VITE_WS_URL`. |
 
 Важно:
 - В mock-режиме `MembersRail` читает статусы из статического `Member[]`, а не из
@@ -387,7 +390,7 @@ START ─▶│  AuthScreen  │ ─── нет ──────│ оста
 |------------|-----------|-----------------------|
 | `VITE_API_BASE` | База REST API | `http://localhost:8080` (prod: `https://api.chazhland.ru`) |
 | `VITE_WS_URL` | Эндпоинт WebSocket | авто-вывод `ws://localhost:8080/ws` (prod: `wss://api.chazhland.ru/ws`) |
-| `VITE_MOCK` | Mock-режим | `true` |
+| `VITE_MOCK` | Mock-режим | `false` (выключен) |
 
 ---
 
@@ -397,8 +400,8 @@ START ─▶│  AuthScreen  │ ─── нет ──────│ оста
 ПОЛЬЗОВАТЕЛЬ
    │ клики, ввод, хоткеи
    ▼
-features/ (React-компоненты: AuthScreen, MainWindow, ChatFeed, Composer,
-   │       BottomBar, ChannelSwitcher, MembersRail, WatchView, AdminScreen…)
+features/ (React-компоненты: AuthScreen, MainWindow, GuildRail, ChannelSidebar,
+   │       ChatFeed, Composer, BottomBar, MembersRail, WatchView, AdminScreen…)
    │
    │ вызовы методов data-layer / подписки
    ▼
@@ -407,7 +410,7 @@ lib/ (data-layer)
    ├── api.ts ───────────────┤── REST ──▶  api.chazhland.ru
    │     └─(VITE_MOCK=true)─▶ mocks/data.ts
    ├── ws.ts ────────────────┼── STOMP ─▶  wss://api.chazhland.ru/ws
-   │     ▲ /topic/channel.* /topic/watch.* /topic/presence
+   │     ▲ /topic/channel.* /topic/watch.* /topic/presence /topic/server.*
    ├── presence.ts ──────────┘ (кэш статусов и голоса)
    ├── voice.ts ─────────────── LiveKit ─▶ livekit.chazhland.ru
    ├── soundboard.ts ────────── presign + PUT ─▶ S3

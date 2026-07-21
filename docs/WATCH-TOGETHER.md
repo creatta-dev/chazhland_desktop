@@ -350,7 +350,9 @@ paused ? positionSeconds : positionSeconds + (Date.now() - updatedAt) / 1000
 `WatchSourceRequest`: `kind` (опционально, по умолчанию `DIRECT` — legacy-совместимость), `url`
 (опционально), `infoHash` (опционально).
 
-Подробности всего бэкенд-контракта см. в [docs/BACKEND-CONTRACT.md](./BACKEND-CONTRACT.md).
+Как клиент вообще работает с бэком (слой `api.ts`, авторизация, неочевидное) — см.
+[docs/BACKEND-CONTRACT.md](./BACKEND-CONTRACT.md); точные схемы запросов/ответов — в swagger бэка
+(`<API_BASE>/swagger-ui.html`).
 
 ---
 

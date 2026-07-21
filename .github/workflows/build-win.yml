@@ -2,6 +2,9 @@ name: Build desktop
 
 # Сборка десктоп-дистрибутивов на раннерах GitHub из ветки dev (рабочая ветка).
 # Windows — на windows-раннере (NSIS-установщик + zip), Linux — на ubuntu-раннере (AppImage).
+# Обе платформы гоняет ОДНА матричная джоба: различия (раннер, флаги electron-builder, маски
+# ассетов, имя Actions-артефакта) вынесены в strategy.matrix, а шаги общие — правку релизных
+# нот или публикации теперь достаточно внести ОДИН раз, а не в двух копиях.
 # Нативный node-datachannel (WebRTC для торрент-просмотра) ставится `npm ci` под целевую ОС
 # и работает в Electron (N-API, пересборка не нужна).
 #
@@ -13,8 +16,14 @@ name: Build desktop
 #  - ручной запуск (workflow_dispatch) → артефакты на странице запуска (best-effort, не валит сборку
 #      при переполненной квоте): "chazhland-win-x64" (Setup .exe + .zip), "chazhland-linux-x64" (.AppImage).
 #
-# mpv/yt-dlp: на Windows вкладываются в сборку (скачиваются ниже); на Linux НЕ бандлятся —
-# там mpv ставится системно (apt install mpv yt-dlp), код берёт его из PATH.
+# ⚠️ ИМЕНА АССЕТОВ — ЧАСТЬ КОНТРАКТА С АПДЕЙТЕРОМ. electron-updater качает файл по имени из
+# latest.yml / latest-linux.yml (уже ловили «имя .exe не совпало с latest.yml → апдейтер 404»).
+# Матрица обязана давать байт-в-байт те же имена и тот же набор ассетов, что и раньше:
+# ${productName}-Setup-${version}.exe + .zip + latest.yml (Windows), .AppImage + latest-linux.yml (Linux).
+#
+# mpv/yt-dlp: на Windows вкладываются в сборку (скачиваются ниже, проверяются ДО упаковки — без них
+# «смотреть вместе» молча мёртв у пользователей); на Linux НЕ бандлятся — там mpv ставится системно
+# (apt install mpv yt-dlp), код берёт его из PATH.
 
 on:
   push:
@@ -30,9 +39,32 @@ permissions:
   contents: write   # нужно для создания Release по тегу
 
 jobs:
-  windows:
-    name: Build & package (windows)
-    runs-on: windows-latest
+  build:
+    name: Build & package (${{ matrix.name }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      # Платформы независимы: падение Windows НЕ должно отменять Linux (как было при двух отдельных джобах).
+      fail-fast: false
+      matrix:
+        include:
+          - name: windows
+            runner: windows-latest
+            builderArgs: --win nsis zip
+            artifact: chazhland-win-x64
+            assets: |
+              release/*.exe
+              release/*.zip
+            metadata: |
+              release/latest.yml
+              release/*.blockmap
+          - name: linux
+            runner: ubuntu-latest
+            builderArgs: --linux AppImage
+            artifact: chazhland-linux-x64
+            assets: release/*.AppImage
+            metadata: |
+              release/latest-linux.yml
+              release/*.blockmap
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -47,8 +79,10 @@ jobs:
         run: npm ci
 
       - name: Fetch mpv + yt-dlp (для просмотра по ссылке/MKV)
+        # Только Windows: на Linux mpv/yt-dlp ставятся системно и в дистрибутив не вкладываются.
+        if: runner.os == 'Windows'
         shell: pwsh
-        continue-on-error: true   # не валим сборку, если зеркало бинарей недоступно — ядро всё равно соберётся
+        continue-on-error: true   # сеть/зеркало может лечь — падаем не тут, а на явной проверке ниже (с внятным текстом)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -68,16 +102,38 @@ jobs:
           }
           Get-ChildItem $dir
 
+      - name: Verify vendored mpv + yt-dlp
+        # Шаг скачивания выше — continue-on-error, а публикация смотрит только на release/*.exe:
+        # без этой проверки зелёный CI спокойно выпускал бы релиз БЕЗ mpv.exe/yt-dlp.exe, то есть с
+        # молча мёртвым «смотреть вместе». Проверяем наличие и вменяемый размер ДО упаковки.
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $dir = "resources/mpv/win32-x64"
+          $bad = @()
+          foreach ($n in @('mpv.exe', 'yt-dlp.exe')) {
+            $f = Get-Item "$dir/$n" -ErrorAction SilentlyContinue
+            # < 1 МБ = не бинарь, а обрезанная закачка или HTML-страница ошибки зеркала
+            if (-not $f) { $bad += "$n (нет файла)" }
+            elseif ($f.Length -lt 1MB) { $bad += "$n ($($f.Length) байт — битая закачка)" }
+          }
+          if ($bad.Count -gt 0) {
+            Write-Host "::error::Не вендорены бинари: $($bad -join '; '). Смотри лог шага «Fetch mpv + yt-dlp» — упаковка остановлена, чтобы не выпустить релиз без «смотреть вместе»."
+            exit 1
+          }
+          Get-ChildItem $dir | Format-Table Name, Length
+
       - name: Build renderer + electron
         run: npm run build
 
-      - name: Package Windows installer + zip
-        run: npx --no-install electron-builder --win nsis zip --publish never
+      - name: Package distributables
+        run: npx --no-install electron-builder ${{ matrix.builderArgs }} --publish never
 
       - name: Extract release notes from CHANGELOG
         # Секцию текущей версии из CHANGELOG.md → RELEASE_NOTES.md → тело GitHub-релиза. Оттуда её читают
         # окно «Что нового» (electron-updater releaseNotes через releases.atom) и бэк-анонс в чат (release .body).
         # shell: bash → на windows-раннере это Git-Bash с awk. Если секции нет — пишем «Release X», чтобы body не пустел.
+        # Обе платформы пишут ОДИН И ТОТ ЖЕ текст → last-writer-wins в теле релиза безвреден.
         if: startsWith(github.ref, 'refs/tags/v')
         shell: bash
         run: |
@@ -90,23 +146,21 @@ jobs:
           if [ ! -s RELEASE_NOTES.md ]; then echo "Release $VER" > RELEASE_NOTES.md; fi
           echo "----- release notes -----"; cat RELEASE_NOTES.md
 
-      - name: Publish Windows installers to Release (tag)
-        # Заливаем .exe/.zip ПРЯМО в Release по тегу — мимо Actions-артефактов (их квота переполнялась
+      - name: Publish installers to Release (tag)
+        # Заливаем установщики ПРЯМО в Release по тегу — мимо Actions-артефактов (их квота переполнялась
         # инсталляторами и валила раздачу). action-gh-release создаёт релиз, если его ещё нет, и дополняет
-        # ассетами; linux-джоба добавит свой .AppImage в тот же релиз.
-        # body_path задаёт тело релиза (обе джобы пишут ОДИН И ТОТ ЖЕ текст из CHANGELOG → last-writer-wins безвреден).
+        # ассетами: обе платформенные джобы кладут свои файлы в ОДИН релиз.
+        # body_path задаёт тело релиза (текст одинаковый у обеих джоб → перезапись безвредна).
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
           body_path: RELEASE_NOTES.md
           fail_on_unmatched_files: true
-          files: |
-            release/*.exe
-            release/*.zip
+          files: ${{ matrix.assets }}
 
-      - name: Publish Windows update metadata to Release (tag)
-        # latest.yml + .blockmap — по ним electron-updater видит новую версию и качает дельту.
+      - name: Publish update metadata to Release (tag)
+        # latest.yml / latest-linux.yml + .blockmap — по ним electron-updater видит новую версию и качает дельту.
         # electron-builder генерит их в release/ при наличии build.publish даже с --publish never.
         # best-effort (fail_on_unmatched: false): установщики уже залиты выше — метаданные не должны валить релиз.
         # append_body: true — этот шаг НЕ перетирает тело релиза (иначе пустой body затёр бы notes из шага выше).
@@ -116,89 +170,16 @@ jobs:
           tag_name: ${{ github.ref_name }}
           append_body: true
           fail_on_unmatched_files: false
-          files: |
-            release/latest.yml
-            release/*.blockmap
+          files: ${{ matrix.metadata }}
 
-      - name: Upload Windows artifact (manual runs only)
+      - name: Upload artifact (manual runs only)
         # Ручной запуск без тега: кладём в Actions-артефакты. best-effort — переполненная квота
         # хранилища НЕ должна валить сборку.
         if: github.event_name == 'workflow_dispatch'
         continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
-          name: chazhland-win-x64
-          path: |
-            release/*.exe
-            release/*.zip
-          if-no-files-found: error
-          retention-days: 14
-
-  linux:
-    name: Build & package (linux)
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Set up Node.js 22
-        uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-          cache: npm
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Build renderer + electron
-        run: npm run build
-
-      - name: Package Linux AppImage
-        run: npx --no-install electron-builder --linux AppImage --publish never
-
-      - name: Extract release notes from CHANGELOG
-        # см. коммент в windows-джобе: секция CHANGELOG → тело релиза. Обе джобы пишут идентичный текст.
-        if: startsWith(github.ref, 'refs/tags/v')
-        shell: bash
-        run: |
-          VER="${GITHUB_REF_NAME#v}"
-          awk -v ver="$VER" '
-            $0 ~ "^## \\[?" ver "\\]?" {grab=1; next}
-            grab && /^## / {exit}
-            grab {print}
-          ' CHANGELOG.md > RELEASE_NOTES.md
-          if [ ! -s RELEASE_NOTES.md ]; then echo "Release $VER" > RELEASE_NOTES.md; fi
-          echo "----- release notes -----"; cat RELEASE_NOTES.md
-
-      - name: Publish Linux AppImage to Release (tag)
-        # см. коммент к Windows: заливаем напрямую в Release, мимо Actions-артефактов. body_path = тот же CHANGELOG-текст.
-        if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ github.ref_name }}
-          body_path: RELEASE_NOTES.md
-          fail_on_unmatched_files: true
-          files: release/*.AppImage
-
-      - name: Publish Linux update metadata to Release (tag)
-        # latest-linux.yml (+ blockmap) для electron-updater AppImage-обновлений. best-effort, см. Windows.
-        # append_body: true — не перетираем тело релиза.
-        if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ github.ref_name }}
-          append_body: true
-          fail_on_unmatched_files: false
-          files: |
-            release/latest-linux.yml
-            release/*.blockmap
-
-      - name: Upload Linux artifact (manual runs only)
-        if: github.event_name == 'workflow_dispatch'
-        continue-on-error: true
-        uses: actions/upload-artifact@v4
-        with:
-          name: chazhland-linux-x64
-          path: release/*.AppImage
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.assets }}
           if-no-files-found: error
           retention-days: 14

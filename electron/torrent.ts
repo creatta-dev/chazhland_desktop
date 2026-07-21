@@ -5,6 +5,7 @@
 // (только xt=urn:btih:<hash>, чужие трекеры/web-seed выкинуты), стрим-сервер слушает только 127.0.0.1
 // и проверяет неугадываемый токен в пути (timingSafeEqual → иначе 404).
 import { ipcMain, type BrowserWindow } from 'electron'
+import type { TorrentStartResult } from './ipc-contract'
 import http from 'node:http'
 import type { AddressInfo } from 'node:net'
 import crypto from 'node:crypto'
@@ -39,7 +40,7 @@ let client: WT | null = null
 async function getClient(): Promise<WT> {
   if (client) return client
   // webtorrent — untyped ESM JS-пакет; грузим как any (типов он не везёт, @types нет)
-  // @ts-ignore
+  // @ts-expect-error — у пакета нет деклараций типов
   const mod: any = await import('webtorrent')
   const WebTorrent = mod.default ?? mod
   client = new WebTorrent()
@@ -180,15 +181,7 @@ async function destroySession(): Promise<void> {
   })
 }
 
-export interface TorrentStartResult {
-  ok: boolean
-  token?: string
-  streamUrl?: string
-  name?: string
-  length?: number
-  webPlayable?: boolean // true → играет <video>; false → нужен mpv (экзотический кодек)
-  error?: string
-}
+// Тип результата живёт в ipc-contract (единый контракт main ↔ preload ↔ рендерер) — см. импорт вверху.
 
 async function start(magnet?: string | null, infoHash?: string | null): Promise<TorrentStartResult> {
   try {

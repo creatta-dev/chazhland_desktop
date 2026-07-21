@@ -1,5 +1,10 @@
 # Increment 4 — libmpv player + WebTorrent streaming — Final Build Plan
 
+> ⚠️ **Исторический документ (снимок плана на 2026-06-17), не описание текущего состояния.**
+> Часть решений с тех пор изменилась (например, `files` в `package.json` уже включает `node_modules`,
+> а mpv-окно пока не встроено через `--wid`). Как оно устроено сейчас — [WATCH-TOGETHER.md](WATCH-TOGETHER.md)
+> и [BUILD.md](BUILD.md).
+
 > Produced by a 10-agent research + design + adversarial-review workflow (2026-06-17).
 > Backend + STOMP watch-sync already exist and are reused, not redesigned. All work is in
 > `electron/` + `WatchView.tsx`. WebTorrent runs ONLY in the desktop app, never on the VPS.
