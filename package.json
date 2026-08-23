@@ -86,6 +86,7 @@
   "dependencies": {
     "@sapphi-red/web-noise-suppressor": "^0.3.5",
     "@stomp/stompjs": "^7.0.0",
+    "denoise-voice-clarity": "^0.2.2",
     "electron-updater": "^6.8.9",
     "livekit-client": "^2.5.0",
     "lucide-react": "^1.20.0",

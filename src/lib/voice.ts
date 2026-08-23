@@ -4,6 +4,7 @@
 // монитор «Проверить микрофон». Наружу по-прежнему торчит только `voice` и типы отсюда.
 import { Room, RoomEvent, Track, AudioPresets, DisconnectReason, type RemoteTrack, type RemoteTrackPublication, type RemoteParticipant, type Participant, type LocalAudioTrack, type AudioCaptureOptions } from 'livekit-client'
 import { createMicProcessor, MicProcessor } from './rnnoise'
+import { createDeepProcessor, type DeepProcessor } from './deepfilter'
 import { MOCK } from './config'
 import { api } from './api'
 import { sfx } from './sfx'
@@ -47,7 +48,9 @@ class Voice {
   private reconnectAttempts = 0 // счётчик подряд идущих авто-переподключений (сброс при успехе)
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null
   private micChain: Promise<void> = Promise.resolve() // очередь операций с микрофоном (анти-гонка)
-  private micProcessor: MicProcessor | null = null // активная мик-цепочка (шумодав + gain); null = без обработки
+  private micProcessor: MicProcessor | DeepProcessor | null = null // активная мик-цепочка; null = без обработки
+  private micProcessorKind: 'mic' | 'deep' | null = null // 'mic' = RNNoise/gain (MicProcessor), 'deep' = DeepFilterNet
+  private deepFailed = false // DeepFilterNet-WASM не поднялся в этой сессии → не долбимся повторно, откат на RNNoise
   // голосовой гейт (порог реагирования микрофона) — замер по клону публикуемого трека
   private gate = new MicGate({ track: () => this.micTrackSource(), threshold: () => this.settings.micThreshold })
   // монитор «Проверить микрофон» (слышу себя) — независимый тракт, от комнаты не зависит
@@ -84,17 +87,19 @@ class Voice {
   // включаем: браузерный NS + RNNoise стакаются — браузер курочит сигнал до RNNoise («роботный» голос).
   private rnnoiseActive() { return this.settings.noiseSuppression && this.settings.noiseSuppressor === 'rnnoise' }
   private browserNsActive() { return this.settings.noiseSuppression && this.settings.noiseSuppressor === 'browser' }
+  private deepfilterActive() { return this.settings.noiseSuppression && this.settings.noiseSuppressor === 'deepfilter' }
 
   private captureOpts(): AudioCaptureOptions {
     return {
       deviceId: this.settings.inputId || undefined,
-      // Браузерный WebRTC-NS включаем ТОЛЬКО когда движок = 'browser'. При движке 'rnnoise' здесь false, а
-      // шумодавом заведует RNNoise (MicProcessor, см. refreshMicProcessor) — иначе два шумодава стакаются.
-      // Если RNNoise не загрузится (крайне редко в Electron — WASM в бандле), NS не будет — приемлемо.
-      // AEC/AGC всегда отдаём браузеру (RNNoise их не делает).
+      // Браузерный WebRTC-NS включаем ТОЛЬКО когда движок = 'browser'. При 'rnnoise'/'deepfilter' здесь false,
+      // а шумодавом заведует клиентская цепочка (MicProcessor / DeepFilterNet, см. refreshMicProcessor) —
+      // иначе два шумодава стакаются. Если клиентский движок не поднимется, NS не будет — приемлемо.
+      // AEC всегда отдаём браузеру. AGC — тоже, КРОМЕ DeepFilterNet: у него своя clarity/AGC-цепочка, браузерный
+      // поверх неё «качал» бы громкость (двойной AGC), поэтому при 'deepfilter' браузерный AGC выключаем.
       noiseSuppression: this.browserNsActive(),
       echoCancellation: this.settings.echoCancellation,
-      autoGainControl: this.settings.autoGain,
+      autoGainControl: this.deepfilterActive() ? false : this.settings.autoGain,
     }
   }
 
@@ -381,6 +386,7 @@ class Voice {
   }
   async setProcessing(p: Partial<Pick<VoiceSettings, 'noiseSuppression' | 'noiseSuppressor' | 'echoCancellation' | 'autoGain'>>) {
     Object.assign(this.settings, p); this.saveSettings()
+    if (p.noiseSuppressor !== undefined || p.noiseSuppression) this.deepFailed = false // явный выбор движка → даём DeepFilterNet ещё шанс
     if (this.room && this.state.micOn) {
       // restartTrack пере-захватывает getUserMedia с новыми constraints. Через mute/unmute это НЕ работало
       // бы: при stopMicTrackOnMute=false трек переиспользуется и новые echoCancellation/AGC игнорируются.
@@ -400,30 +406,54 @@ class Voice {
   }
   setPttKey(code: string) { this.settings.pttKey = code; this.saveSettings() }
 
-  // Мик-цепочка: нейросетевой шумодав RNNoise (давит стук клавиш/мыши) + ручное усиление (gain).
-  // RNNoise ПОЛНОСТЬЮ клиентский (Web Audio + WASM), без сервера/лицензии — в отличие от Krisp, которому
-  // нужен LiveKit Cloud (на self-host он давал 404). Процессор поднимаем ТОЛЬКО когда он что-то меняет
-  // (шумодав вкл ИЛИ громкость ≠ 1) — иначе публикуем сырой трек, как раньше (нулевая регрессия).
-  // Изменения применяются на лету (setSuppress / setGain), без перезагрузки WASM.
+  // Мик-цепочка: клиентский шумодав + ручное усиление (gain). Два движка на выбор, оба ПОЛНОСТЬЮ клиентские
+  // (Web Audio + WASM), без сервера/лицензии — в отличие от Krisp, которому нужен LiveKit Cloud (на self-host
+  // давал 404): 'mic' = MicProcessor (RNNoise, лёгкий) + gain; 'deep' = DeepFilterNet (тяжелее, давит клики
+  // поверх речи). Процессор поднимаем ТОЛЬКО когда он что-то меняет (шумодав вкл ИЛИ громкость ≠ 1) — иначе
+  // публикуем сырой трек. Смена движка = снять старый процессор и поставить новый; MicProcessor обновляется
+  // на лету (setSuppress/setGain). Если DeepFilterNet-WASM не поднялся — откатываемся на RNNoise (не сырой трек).
   private async refreshMicProcessor() {
     if (MOCK || !this.room) return
     const track = this.room.localParticipant.getTrackPublication(Track.Source.Microphone)?.track as LocalAudioTrack | undefined
     if (!track) return
-    const suppress = this.rnnoiseActive() // RNNoise-шумодав активен только при движке 'rnnoise'
     const gain = this.settings.micVolume
-    const need = suppress || gain !== 1
-    const cur = this.micProcessor && track.getProcessor() === this.micProcessor ? this.micProcessor : null
-    if (!need) {
-      if (cur) { try { await track.stopProcessor() } catch { /* */ } }
-      this.micProcessor = null
+    const deepWanted = this.deepfilterActive()
+    const deepUsable = deepWanted && !this.deepFailed
+    // RNNoise-подавление: явно выбран 'rnnoise' ЛИБО откат с DeepFilterNet, который в этой сессии не загрузился.
+    const rnnoiseSuppress = this.rnnoiseActive() || (deepWanted && this.deepFailed)
+    const wantMic = !deepUsable && (rnnoiseSuppress || gain !== 1) // MicProcessor нужен под RNNoise и/или ручной gain
+    const wantKind: 'mic' | 'deep' | null = deepUsable ? 'deep' : wantMic ? 'mic' : null
+
+    const curOk = !!this.micProcessor && track.getProcessor() === this.micProcessor
+    const curKind = curOk ? this.micProcessorKind : null
+
+    // Тот же движок уже стоит — MicProcessor обновляем на лету, DeepFilterNet трогать не надо
+    if (curKind === wantKind) {
+      if (curKind === 'mic') { const p = this.micProcessor as MicProcessor; p.setSuppress(rnnoiseSuppress); p.setGain(gain) }
       return
     }
-    if (cur) { cur.setSuppress(suppress); cur.setGain(gain); return } // живое обновление — без пересоздания
+    // Движок сменился (или больше не нужен) — снимаем старый процессор
+    if (curOk) { try { await track.stopProcessor() } catch { /* */ } }
+    this.micProcessor = null; this.micProcessorKind = null
+    if (wantKind === null) return // сырой трек: браузерный NS или шумодав выключен — клиентская обработка не нужна
+
+    if (wantKind === 'deep') {
+      const proc = await createDeepProcessor()
+      if (proc) {
+        try { await track.setProcessor(proc); this.micProcessor = proc; this.micProcessorKind = 'deep'; return }
+        catch { try { await proc.destroy() } catch { /* */ } }
+      }
+      // DeepFilterNet не поднялся → помечаем сессию и откатываемся на RNNoise, чтобы шумодав всё же остался
+      this.deepFailed = true
+      toast.error('Движок «Высокое качество» недоступен — использую RNNoise')
+    }
+    // MicProcessor: RNNoise-подавление и/или ручной gain. Сюда же — откат с не поднявшегося DeepFilterNet (с RNNoise вкл).
+    const micSuppress = rnnoiseSuppress || wantKind === 'deep'
     try {
-      const proc = createMicProcessor({ suppress, gain })
+      const proc = createMicProcessor({ suppress: micSuppress, gain })
       await track.setProcessor(proc)
-      this.micProcessor = proc
-    } catch { this.micProcessor = null /* RNNoise недоступен → публикуем сырой трек (браузерный NS выключен в captureOpts) */ }
+      this.micProcessor = proc; this.micProcessorKind = 'mic'
+    } catch { this.micProcessor = null; this.micProcessorKind = null /* и RNNoise не поднялся → сырой трек */ }
   }
 
   // ---- голосовой гейт (порог реагирования микрофона) ----
@@ -507,7 +537,7 @@ class Voice {
   private onDisconnected(reason?: DisconnectReason) {
     this.gate.stop(false)
     this.room = null
-    this.micProcessor = null
+    this.micProcessor = null; this.micProcessorKind = null
     window.chazh?.setMicHotkey(null)
     this.remoteAudio.clear()
     this.screenTracks.clear(); this.activeScreenId = null; this.speaking.clear(); this.pttHeld = false
@@ -547,7 +577,7 @@ class Voice {
     this.activeScreenId = null
     this.speaking.clear()
     this.pttHeld = false
-    this.micProcessor = null
+    this.micProcessor = null; this.micProcessorKind = null
     const r = this.room
     this.room = null
     if (r) { r.removeAllListeners(); try { await r.disconnect() } catch { /* */ } }

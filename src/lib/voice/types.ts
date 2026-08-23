@@ -13,8 +13,11 @@ export type ScreenQuality = 'source' | 'q1080' | 'q720' | 'q360'
 // индикатор уровня используют один масштаб, чтобы метка и полоска совпадали визуально.
 export const MIC_RMS_FULL = 0.3
 
-/** движок шумоподавления, когда оно включено: RNNoise (клиентский нейросетевой) или встроенный браузерный WebRTC-NS */
-export type NoiseSuppressor = 'rnnoise' | 'browser'
+/** движок шумоподавления, когда оно включено:
+ *  'rnnoise'    — клиентский нейросетевой (лёгкий, давит клавиатуру/мышь/гул в паузах);
+ *  'deepfilter' — DeepFilterNet 3 (тяжелее, но давит клики даже ПОВЕРХ речи — «Высокое качество»);
+ *  'browser'    — встроенный WebRTC-NS. Одновременно активен ровно один. */
+export type NoiseSuppressor = 'rnnoise' | 'deepfilter' | 'browser'
 
 export interface VoiceSettings {
   inputId: string   // '' = устройство по умолчанию

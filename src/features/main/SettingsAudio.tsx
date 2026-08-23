@@ -110,12 +110,13 @@ export function SettingsAudio() {
       <Section label="Обработка звука">
         <Toggle label="Шумоподавление" on={s.noiseSuppression} onClick={() => { const v = !s.noiseSuppression; voice.setProcessing({ noiseSuppression: v }); setS((p) => ({ ...p, noiseSuppression: v })) }} />
         {s.noiseSuppression && (
-          <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
-            <ModeBtn active={s.noiseSuppressor === 'rnnoise'} onClick={() => { voice.setProcessing({ noiseSuppressor: 'rnnoise' }); setS((p) => ({ ...p, noiseSuppressor: 'rnnoise' })) }} title="Нейросеть (RNNoise)" desc="давит клавиши/мышь/гул" />
-            <ModeBtn active={s.noiseSuppressor === 'browser'} onClick={() => { voice.setProcessing({ noiseSuppressor: 'browser' }); setS((p) => ({ ...p, noiseSuppressor: 'browser' })) }} title="Браузерный" desc="встроенный WebRTC-шумодав" />
+          <div style={{ display: 'flex', gap: 8, marginTop: 8, flexWrap: 'wrap' }}>
+            <ModeBtn active={s.noiseSuppressor === 'rnnoise'} onClick={() => { voice.setProcessing({ noiseSuppressor: 'rnnoise' }); setS((p) => ({ ...p, noiseSuppressor: 'rnnoise' })) }} title="Нейросеть (RNNoise)" desc="лёгкий · клавиши/мышь/гул" />
+            <ModeBtn active={s.noiseSuppressor === 'deepfilter'} onClick={() => { voice.setProcessing({ noiseSuppressor: 'deepfilter' }); setS((p) => ({ ...p, noiseSuppressor: 'deepfilter' })) }} title="Высокое качество" desc="клики даже во время речи" />
+            <ModeBtn active={s.noiseSuppressor === 'browser'} onClick={() => { voice.setProcessing({ noiseSuppressor: 'browser' }); setS((p) => ({ ...p, noiseSuppressor: 'browser' })) }} title="Браузерный" desc="встроенный WebRTC" />
           </div>
         )}
-        <Hint>Нейросетевой (RNNoise) — клиентский, хорошо давит стук клавиатуры, клики мыши и фоновый гул. Браузерный — встроенный в WebRTC; на некоторых микрофонах звучит естественнее. Работает только один — одновременно оба включать нельзя (стакаются в «роботный» голос).</Hint>
+        <Hint>RNNoise — лёгкий клиентский, давит стук клавиатуры, клики мыши и фоновый гул в паузах. Высокое качество (DeepFilterNet) — сильнее, убирает клики/клаву даже когда вы говорите, но заметно тяжелее по CPU (первое включение — короткая пауза на загрузку модели). Браузерный — встроенный в WebRTC. Работает только один — одновременно не стакаются.</Hint>
         <Toggle label="Эхоподавление" on={s.echoCancellation} onClick={() => { const v = !s.echoCancellation; voice.setProcessing({ echoCancellation: v }); setS((p) => ({ ...p, echoCancellation: v })) }} />
         <Toggle label="Авто-громкость (AGC)" on={s.autoGain} onClick={() => { const v = !s.autoGain; voice.setProcessing({ autoGain: v }); setS((p) => ({ ...p, autoGain: v })) }} />
       </Section>

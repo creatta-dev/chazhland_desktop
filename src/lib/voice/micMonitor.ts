@@ -3,12 +3,13 @@
 // LiveKit не зависит — поэтому живёт отдельным модулем.
 import { type AudioProcessorOptions } from 'livekit-client'
 import { createMicProcessor, MicProcessor } from '../rnnoise'
+import { createDeepProcessor, type DeepProcessor } from '../deepfilter'
 import { MOCK } from '../config'
 import { MIC_RMS_FULL, type VoiceSettings } from './types'
 
 export class MicMonitor {
   private stream: MediaStream | null = null
-  private proc: MicProcessor | null = null
+  private proc: MicProcessor | DeepProcessor | null = null
   private el: HTMLAudioElement | null = null
   private ctx: AudioContext | null = null
   private raf: number | null = null
@@ -20,6 +21,7 @@ export class MicMonitor {
 
   private rnnoiseActive() { const s = this.settings(); return s.noiseSuppression && s.noiseSuppressor === 'rnnoise' }
   private browserNsActive() { const s = this.settings(); return s.noiseSuppression && s.noiseSuppressor === 'browser' }
+  private deepfilterActive() { const s = this.settings(); return s.noiseSuppression && s.noiseSuppressor === 'deepfilter' }
 
   // onLevel — живой RMS (0..1 по MIC_RMS_FULL). Заодно показывает, давит ли шумодав клавиатуру/мышь.
   // Не зависит от того, в звонке ли мы.
@@ -37,7 +39,15 @@ export class MicMonitor {
       })
       this.stream = stream
       let out = stream.getAudioTracks()[0]
-      if (this.rnnoiseActive() || this.settings().micVolume !== 1) {
+      if (this.deepfilterActive()) {
+        try {
+          const proc = await createDeepProcessor() // тяжёлый WASM грузится динамически, только для самопроверки этого движка
+          if (proc) {
+            await proc.init({ track: out } as unknown as AudioProcessorOptions)
+            if (proc.processedTrack) { this.proc = proc; out = proc.processedTrack }
+          }
+        } catch { /* DeepFilterNet не поднялся — слышим сырой мик */ }
+      } else if (this.rnnoiseActive() || this.settings().micVolume !== 1) {
         try {
           const proc = createMicProcessor({ suppress: this.rnnoiseActive(), gain: this.settings().micVolume })
           await proc.init({ track: out } as unknown as AudioProcessorOptions) // init читает только opts.track
