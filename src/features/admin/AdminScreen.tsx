@@ -1,5 +1,5 @@
 import { Fragment, useCallback, useEffect, useState } from 'react'
-import { ChevronLeft, ChevronDown, Lock, Key, X, UserMinus, ArrowLeftRight, Plus, Volume2, Music, AlertTriangle, Copy, Link2, Check, LogOut, RotateCw } from 'lucide-react'
+import { ChevronLeft, ChevronDown, Lock, Key, X, UserMinus, ArrowLeftRight, Plus, Volume2, Music, AlertTriangle, Copy, Link2, Check, LogOut, RotateCw, Search, Mail } from 'lucide-react'
 import { api } from '@/lib/api'
 import { toast } from '@/lib/toast'
 import { apiError } from '@/lib/http'
@@ -12,9 +12,10 @@ import { ConfirmModal, ChangeRoleModal, TempPasswordModal } from './modals'
 import { RolesTab } from './RolesTab'
 import { ChannelAccessTab } from './ChannelAccessTab'
 import type { AfkSettings, AuditEntry, InviteCreated, InviteSummary, Member, ServerSummary } from '@/lib/types'
+import type { AdminUserDto } from '@/lib/api/dto'
 
-type Tab = 'members' | 'roles' | 'channels' | 'invites' | 'server' | 'audit'
-const TAB_LABEL: Record<Tab, string> = { members: 'Участники', roles: 'Роли', channels: 'Каналы', invites: 'Приглашения', server: 'Сервер', audit: 'Аудит' }
+type Tab = 'members' | 'roles' | 'channels' | 'invites' | 'server' | 'users' | 'audit'
+const TAB_LABEL: Record<Tab, string> = { members: 'Участники', roles: 'Роли', channels: 'Каналы', invites: 'Приглашения', server: 'Сервер', users: 'Пользователи', audit: 'Аудит' }
 
 export function AdminScreen({ serverId, isHome, onClose, onRenamed, onLeft }: {
   serverId?: string
@@ -25,7 +26,7 @@ export function AdminScreen({ serverId, isHome, onClose, onRenamed, onLeft }: {
 }) {
   const [tab, setTab] = useState<Tab>('members')
   // аудит и сброс пароля — операции уровня инсталляции (домашний сервер); на остальных серверах прячем
-  const tabs: Tab[] = ['members', 'roles', 'channels', 'invites', 'server', ...(isHome ? (['audit'] as Tab[]) : [])]
+  const tabs: Tab[] = ['members', 'roles', 'channels', 'invites', 'server', ...(isHome ? (['users', 'audit'] as Tab[]) : [])]
   return (
     <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', background: 'var(--win)' }}>
       <div style={{ height: 52, flex: 'none', display: 'flex', alignItems: 'center', gap: 12, padding: '0 22px', borderBottom: '1px solid var(--border)' }}>
@@ -45,6 +46,7 @@ export function AdminScreen({ serverId, isHome, onClose, onRenamed, onLeft }: {
         {tab === 'channels' && <ChannelAccessTab serverId={serverId} />}
         {tab === 'invites' && <InvitesTab serverId={serverId} />}
         {tab === 'server' && <ServerTab serverId={serverId} onRenamed={onRenamed} onLeft={onLeft} />}
+        {tab === 'users' && isHome && <UsersTab />}
         {tab === 'audit' && isHome && <AuditTab />}
       </div>
     </div>
@@ -205,6 +207,113 @@ function AuditTab() {
         })}
       </Card>
     </div>
+  )
+}
+
+// Вкладка «Пользователи» (уровень инсталляции, только домашний сервер): все зареганные юзеры с фильтрами.
+// e-mail отдаётся бэком только владельцу (иначе null → «скрыто»). Пагинация курсорная («Загрузить ещё»).
+function UsersTab() {
+  const [rows, setRows] = useState<AdminUserDto[] | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [cursor, setCursor] = useState<string | null>(null)
+  const [hasMore, setHasMore] = useState(false)
+  const [more, setMore] = useState(false)   // идёт подгрузка следующей страницы
+  const [q, setQ] = useState('')
+  const [from, setFrom] = useState('')      // YYYY-MM-DD
+  const [to, setTo] = useState('')
+
+  const filter = useCallback((extra?: { cursor?: string }) => {
+    const fromMs = from ? Date.parse(from) : NaN
+    const toMs = to ? Date.parse(to) + 86_399_999 : NaN   // «по» включительно — весь выбранный день
+    return {
+      q: q.trim() || undefined,
+      fromMs: Number.isNaN(fromMs) ? undefined : fromMs,
+      toMs: Number.isNaN(toMs) ? undefined : toMs,
+      cursor: extra?.cursor,
+    }
+  }, [q, from, to])
+
+  const load = useCallback(async () => {
+    setError(null); setRows(null)
+    try { const p = await api.adminUsers(filter()); setRows(p.items); setCursor(p.nextCursor); setHasMore(p.hasMore) }
+    catch (e) { setError(apiError(e, 'Не удалось загрузить пользователей')); setRows([]) }
+  }, [filter])
+
+  // дебаунс 300мс: перезагружаем список при смене поиска/дат
+  useEffect(() => {
+    let a = true
+    const t = setTimeout(() => {
+      api.adminUsers(filter())
+        .then((p) => { if (a) { setRows(p.items); setCursor(p.nextCursor); setHasMore(p.hasMore); setError(null) } })
+        .catch((e) => { if (a) { setError(apiError(e, 'Не удалось загрузить пользователей')); setRows([]) } })
+    }, 300)
+    return () => { a = false; clearTimeout(t) }
+  }, [filter])
+
+  async function loadMore() {
+    if (!cursor || more) return
+    setMore(true)
+    try { const p = await api.adminUsers(filter({ cursor })); setRows((rs) => [...(rs ?? []), ...p.items]); setCursor(p.nextCursor); setHasMore(p.hasMore) }
+    catch (e) { toast.error(apiError(e, 'Не удалось подгрузить ещё')) }
+    finally { setMore(false) }
+  }
+
+  const cols = '1.6fr 1.7fr 1fr'
+  return (
+    <div style={{ animation: 'fadeIn .35s ease' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16 }}>
+        <div style={{ fontWeight: 800, fontSize: 24, letterSpacing: '-.02em' }}>Пользователи</div>
+        {rows && <span style={{ fontSize: 13, color: 'var(--text-3)' }}>{rows.length}{hasMore ? '+' : ''}</span>}
+      </div>
+      <div style={{ display: 'flex', gap: 10, marginBottom: 16, flexWrap: 'wrap', alignItems: 'center' }}>
+        <div style={{ position: 'relative', flex: '1 1 220px', minWidth: 180 }}>
+          <Search size={15} style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-3)' }} />
+          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Поиск по логину или почте" className="no-drag"
+            style={{ width: '100%', padding: '10px 12px 10px 34px', borderRadius: 10, border: '1px solid var(--border-2)', background: 'var(--win)', color: 'var(--text)', outline: 'none', fontSize: 13.5 }} />
+        </div>
+        <DateField label="Зареган с" value={from} onChange={setFrom} />
+        <DateField label="по" value={to} onChange={setTo} />
+        {(q || from || to) && <button className="pill no-drag" onClick={() => { setQ(''); setFrom(''); setTo('') }} style={{ padding: '8px 12px', fontWeight: 600, fontSize: 12.5 }}>Сброс</button>}
+      </div>
+      {error ? <LoadError text={error} onRetry={load} /> : !rows ? <Loading /> : rows.length === 0 ? (
+        <div style={{ color: 'var(--text-3)', fontSize: 13.5, padding: '24px 4px' }}>Никого не найдено по фильтрам.</div>
+      ) : (
+        <>
+          <Card>
+            <div style={{ display: 'grid', gridTemplateColumns: cols, gap: 12, padding: '12px 20px', borderBottom: '1px solid var(--border)', fontSize: 10.5, fontWeight: 700, letterSpacing: '.06em', color: 'var(--text-3)' }}>
+              <span>ПОЛЬЗОВАТЕЛЬ</span><span>E-MAIL</span><span>ЗАРЕГИСТРИРОВАН</span>
+            </div>
+            {rows.map((u, i) => (
+              <div key={u.id} style={{ display: 'grid', gridTemplateColumns: cols, gap: 12, padding: '12px 20px', borderBottom: i < rows.length - 1 ? '1px solid var(--surface-2)' : undefined, alignItems: 'center' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 11, minWidth: 0 }}>
+                  <Avatar name={u.username} size={34} />
+                  <span style={{ fontWeight: 600, fontSize: 14, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{u.username}</span>
+                </div>
+                {u.email
+                  ? <span style={{ fontSize: 13, color: 'var(--text-2)', display: 'flex', alignItems: 'center', gap: 7, minWidth: 0 }}><Mail size={13} style={{ color: 'var(--text-3)', flex: 'none' }} /><span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{u.email}</span></span>
+                  : <span style={{ fontSize: 12.5, color: 'var(--text-3)' }} title="E-mail виден только владельцу">скрыто</span>}
+                <span style={{ fontSize: 12.5, color: 'var(--text-3)' }}>{formatDateTime(u.createdAt)}</span>
+              </div>
+            ))}
+          </Card>
+          {hasMore && (
+            <div style={{ marginTop: 14, display: 'flex', justifyContent: 'center' }}>
+              <button onClick={loadMore} disabled={more} className="pill no-drag" style={{ padding: '9px 18px', fontWeight: 600, fontSize: 13, opacity: more ? 0.6 : 1 }}>{more ? 'Загрузка…' : 'Загрузить ещё'}</button>
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  )
+}
+
+function DateField({ label, value, onChange }: { label: string; value: string; onChange: (v: string) => void }) {
+  return (
+    <label style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 12.5, color: 'var(--text-3)', whiteSpace: 'nowrap' }}>
+      {label}
+      <input type="date" value={value} onChange={(e) => onChange(e.target.value)} className="no-drag"
+        style={{ padding: '8px 10px', borderRadius: 10, border: '1px solid var(--border-2)', background: 'var(--win)', color: 'var(--text)', outline: 'none', fontSize: 13 }} />
+    </label>
   )
 }
 

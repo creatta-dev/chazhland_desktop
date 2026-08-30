@@ -2,7 +2,7 @@ import { MOCK } from '../config'
 import { formatTimeThenDate } from '../format'
 import { http, delay } from '../http'
 import type { AuditEntry } from '../types'
-import type { AuditDto, Page } from './dto'
+import type { AdminUserDto, AuditDto, Page } from './dto'
 import { resolveName } from './memberDirectory'
 import { ensureMembersLoaded } from './members'
 import { MOCK_AUDIT } from '@/mocks/data'
@@ -39,4 +39,20 @@ export async function resetMemberPassword(userId: string): Promise<string> {
   return r.temporaryPassword
 }
 
-export const adminApi = { audit, resetMemberPassword }
+// Список пользователей инсталляции для админ-панели (страница курсорной пагинации). Фильтры опциональны:
+// q — поиск по логину/почте; fromMs/toMs — диапазон дат регистрации (epoch-мс); cursor — из nextCursor.
+export interface AdminUsersFilter { q?: string; fromMs?: number; toMs?: number; cursor?: string; limit?: number }
+
+export async function adminUsers(f: AdminUsersFilter = {}): Promise<Page<AdminUserDto>> {
+  if (MOCK) { await delay(150); return { items: [], nextCursor: null, hasMore: false } }
+  const qs = new URLSearchParams()
+  if (f.q) qs.set('q', f.q)
+  if (f.fromMs != null) qs.set('fromMs', String(f.fromMs))
+  if (f.toMs != null) qs.set('toMs', String(f.toMs))
+  if (f.cursor) qs.set('cursor', f.cursor)
+  if (f.limit != null) qs.set('limit', String(f.limit))
+  const q = qs.toString()
+  return http<Page<AdminUserDto>>('/admin/users' + (q ? '?' + q : ''))
+}
+
+export const adminApi = { audit, resetMemberPassword, adminUsers }

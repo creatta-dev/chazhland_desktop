@@ -6,6 +6,8 @@ import type { Category, Channel, MessageType, Role } from '../types'
 export interface Page<T> { items: T[]; nextCursor: string | null; hasMore: boolean }
 
 export interface UserDto { id: string; username: string; avatarUrl: string | null; status?: string; statusMessage?: string | null; role?: Role }
+// строка админ-панели «Пользователи»: email приходит только владельцу инсталляции, иначе null (ПДн)
+export interface AdminUserDto { id: string; username: string; email: string | null; status: string; createdAt: string }
 export interface MemberDto { userId: string; username: string; avatarUrl: string | null; role: Role; status: string; joinedAt: string; soundboardDisabled?: boolean; roleIds?: string[]; statusMessage?: string | null }
 export interface ChannelDto { id: string; categoryId: string | null; name: string; type: Channel['type']; topic: string | null; position: number; userLimit: number | null; slowModeSeconds: number; lastMessageId: string | null; system?: boolean }
 export interface TreeDto { serverId: string; categories: Category[]; channels: ChannelDto[] }
