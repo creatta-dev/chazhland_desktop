@@ -1,7 +1,7 @@
 {
   "name": "chazhland-desktop",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Десктоп-клиент мессенджера chazhland (Windows-first, Electron)",
   "type": "module",
   "main": "dist-electron/main.js",
@@ -24,7 +24,7 @@
     "publish": [
       {
         "provider": "github",
-        "owner": "MrrMD",
+        "owner": "creatta-dev",
         "repo": "chazhland_desktop"
       }
     ],
