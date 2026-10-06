@@ -13,6 +13,18 @@ export async function servers(): Promise<ServerSummary[]> {
   if (MOCK) { await delay(120); return MOCK_SERVERS }
   return http<ServerSummary[]>('/servers')
 }
+/** Мой личный порядок серверов в рейле (drag-n-drop). Бэк отвечает списком уже в новом порядке. */
+export async function reorderServers(orderedIds: string[]): Promise<ServerSummary[]> {
+  if (MOCK) { await delay(80); return orderedIds.map((id) => MOCK_SERVERS.find((s) => s.id === id)).filter((s): s is ServerSummary => !!s) }
+  return http<ServerSummary[]>('/servers/order', { method: 'PUT', body: JSON.stringify({ orderedIds }) })
+}
+/**
+ * Домашний сервер инсталляции = с МИНИМАЛЬНЫМ id (ULID ~ время создания) — так считает бэк (AccessGuard).
+ * Раньше брали servers[0], но теперь порядок рейла личный и первым может стоять любой сервер.
+ */
+export function homeServerId(list: ServerSummary[]): string | undefined {
+  return list.reduce<string | undefined>((min, s) => (min === undefined || s.id < min ? s.id : min), undefined)
+}
 export async function createServer(name: string, iconObjectKey?: string): Promise<ServerSummary> {
   if (MOCK) { await delay(250); return { id: 's_' + crypto.randomUUID().slice(0, 8), name, iconUrl: null, ownerId: getMeId() || MOCK_USER.id, myRole: 'OWNER', memberCount: 1 } }
   return http<ServerSummary>('/servers', { method: 'POST', body: JSON.stringify({ name, iconObjectKey: iconObjectKey ?? null }) })
@@ -57,6 +69,6 @@ export async function serverTree(serverId?: string): Promise<ServerTree> {
 }
 
 export const serversApi = {
-  servers, createServer, joinServer, leaveServer, renameServer,
+  servers, reorderServers, createServer, joinServer, leaveServer, renameServer,
   listInvites, createInvite, revokeInvite, serverTree,
 }

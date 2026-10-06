@@ -1,19 +1,63 @@
+import { useState } from 'react'
 import { Plus } from 'lucide-react'
 import type { ServerSummary } from '@/lib/types'
 
 // Самая левая колонка — серверы (как «гилд-бар» в Discord). Клик переключает сервер; «+» — создать/войти.
-export function GuildRail({ servers, currentId, badges, onSwitch, onAdd }: {
+// Порядок личный: перетаскиванием каждый расставляет СВОИ серверы как хочет (бэк хранит позицию в членстве).
+export function GuildRail({ servers, currentId, badges, onSwitch, onAdd, onReorder }: {
   servers: ServerSummary[]
   currentId: string
   badges?: Map<string, { unread: boolean; mentions: number }>
   onSwitch: (id: string) => void
   onAdd: () => void
+  onReorder: (orderedIds: string[]) => void
 }) {
+  const [dragId, setDragId] = useState<string | null>(null)
+  const [insertAt, setInsertAt] = useState<number | null>(null) // индекс вставки 0..n
+
+  function end() { setDragId(null); setInsertAt(null) }
+  function drop(e: React.DragEvent) {
+    e.preventDefault()
+    const id = dragId, at = insertAt
+    end()
+    if (!id || at === null) return
+    const before = servers.map((s) => s.id)
+    const ids = before.slice()
+    const from = ids.indexOf(id)
+    if (from < 0) return
+    ids.splice(from, 1)
+    ids.splice(at > from ? at - 1 : at, 0, id)
+    if (ids.join() !== before.join()) onReorder(ids)
+  }
+
+  const Marker = () => <div style={{ width: 40, height: 3, borderRadius: 3, background: 'var(--accent)', flex: 'none', margin: '-5px 0' }} />
+
   return (
-    <div style={{ width: 72, flex: 'none', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, padding: '12px 0', background: 'var(--surface-2)', borderRight: '1px solid var(--border)', overflowY: 'auto' }}>
-      {servers.map((s) => (
-        <GuildIcon key={s.id} server={s} active={s.id === currentId} badge={badges?.get(s.id)} onClick={() => onSwitch(s.id)} />
+    <div onDragOver={(e) => { if (dragId) e.preventDefault() }} onDrop={drop}
+      style={{ width: 72, flex: 'none', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, padding: '12px 0', background: 'var(--surface-2)', borderRight: '1px solid var(--border)', overflowY: 'auto' }}>
+      {servers.map((s, i) => (
+        <div key={s.id} style={{ display: 'contents' }}>
+          {insertAt === i && <Marker />}
+          <div
+            draggable
+            title={s.name}
+            onDragStart={(e) => { e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', s.id); setDragId(s.id) }}
+            onDragOver={(e) => {
+              if (!dragId) return
+              e.preventDefault()
+              e.dataTransfer.dropEffect = 'move'
+              const r = e.currentTarget.getBoundingClientRect()
+              setInsertAt(i + (e.clientY > r.top + r.height / 2 ? 1 : 0))
+            }}
+            onDrop={drop}
+            onDragEnd={end}
+            style={{ opacity: dragId === s.id ? 0.35 : 1, transition: 'opacity .12s' }}
+          >
+            <GuildIcon server={s} active={s.id === currentId} badge={badges?.get(s.id)} onClick={() => onSwitch(s.id)} />
+          </div>
+        </div>
       ))}
+      {insertAt === servers.length && <Marker />}
       <button
         className="no-drag"
         onClick={onAdd}
@@ -36,7 +80,6 @@ function GuildIcon({ server, active, badge, onClick }: { server: ServerSummary; 
       <button
         className="no-drag"
         onClick={onClick}
-        title={server.name}
         style={{
           width: 48, height: 48, flex: 'none', cursor: 'pointer',
           borderRadius: active ? 15 : 24, transition: 'border-radius .18s ease',
@@ -48,7 +91,7 @@ function GuildIcon({ server, active, badge, onClick }: { server: ServerSummary; 
         }}
       >
         {server.iconUrl
-          ? <img src={server.iconUrl} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+          ? <img src={server.iconUrl} alt="" draggable={false} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
           : initials}
       </button>
       {mentions > 0 && (

@@ -1,5 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { api, type ServerTree } from '@/lib/api'
+import { api, homeServerId, type ServerTree } from '@/lib/api'
+import { friends } from '@/lib/friends'
+import { FriendsView } from './FriendsView'
+import { FriendshipActions } from './FriendshipActions'
 import { useAuth } from '@/store/auth'
 import { voice, type VoiceState } from '@/lib/voice'
 import { talkHeartbeat } from '@/lib/talkHeartbeat'
@@ -67,7 +70,7 @@ export function MainWindow() {
   const [serverActionsOpen, setServerActionsOpen] = useState(false)
   const currentServerIdRef = useLatest(currentServerId)
 
-  const [view, setView] = useState<'chat' | 'admin'>('chat')
+  const [view, setView] = useState<'chat' | 'admin' | 'friends'>('chat')
   const [membersExpanded, setMembersExpanded] = useState(true)
   const [status, setStatus] = useState<Presence>(() => (localStorage.getItem('chazh.status') as Presence) || 'online')
   const [replyTo, setReplyTo] = useState<Message | null>(null)
@@ -182,6 +185,30 @@ export function MainWindow() {
 
   // считаем время РЕЧИ в голосе и шлём talk-хартбит (talk-XP); серверный кап режет накрутку
   useEffect(() => { talkHeartbeat.start(user.id); return () => talkHeartbeat.stop() }, [user.id])
+
+  // друзья: общий стор (личный WS-топик + рефреш на реконнекте); ре-рендер — для гейта ЛС и бейджа заявок
+  const [, setFriendsTick] = useState(0)
+  useEffect(() => { friends.start(user.id); return () => friends.stop() }, [user.id])
+  useEffect(() => friends.subscribe(() => setFriendsTick((t) => t + 1)), [])
+
+  // структура каналов/групп изменилась (кто-то создал/переставил/переименовал) → перечитать дерево ЭТОГО сервера.
+  // Подписка на ВСЕ серверы рейла: карта каналов нужна и для фоновых уведомлений по неоткрытым серверам.
+  const serverIdsKey = servers.map((s) => s.id).join(',')
+  useEffect(() => {
+    const ids = serverIdsKey ? serverIdsKey.split(',') : []
+    const offs = ids.map((sid) => ws.onServerTree(sid, () => {
+      api.serverTree(sid).then((t) => {
+        setServerChannels((m) => { const n = new Map(m); n.set(sid, t.channels); return n })
+        if (currentServerIdRef.current !== sid) return
+        setTree(t)
+        // открытый канал удалили/спрятали — уходим на первый текстовый (ЛС не трогаем: их нет в дереве)
+        setCurrentId((cur) => (!cur || t.channels.some((c) => c.id === cur) || dmsRef.current.some((d) => d.id === cur) ? cur : (t.channels.find((c) => c.type === 'TEXT')?.id ?? t.channels[0]?.id ?? '')))
+      }).catch(() => {})
+    }))
+    return () => offs.forEach((off) => off())
+    // currentServerIdRef/dmsRef — стабильные ref'ы useLatest
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [serverIdsKey])
 
   // RANK_UP по WS: свой апгрейд → праздничный тост; любой апгрейд на этом сервере → обновить чипы
   useEffect(() => {
@@ -450,6 +477,9 @@ export function MainWindow() {
   const activeShare = vs.screens.find((s) => s.id === vs.activeScreenId)
   const screenSharerName = (activeShare && (membersById.get(activeShare.userId)?.username || activeShare.by)) || vs.screenBy || 'кто-то'
   const isWatch = channel?.type === 'WATCH'
+  // ЛС с не-другом: история читается, а вместо поля ввода — плашка с кнопками дружбы (бэк всё равно отдаст 403)
+  const currentDm = channel?.type === 'DM' ? dms.find((d) => d.id === currentId) : undefined
+  const dmLocked = !!currentDm && friends.loaded && !friends.isFriend(currentDm.otherUserId)
   useEffect(() => { window.chazh?.setBadge(unreadTotal) }, [unreadTotal]) // бейдж в доке/таскбаре
   // если права модератора пропали (понизили роль), пока открыта админ-панель — выкидываем в чат
   useEffect(() => { if (view === 'admin' && !canModerate) setView('chat') }, [view, canModerate])
@@ -624,6 +654,16 @@ export function MainWindow() {
 
   async function openDm(userId: string) {
     if (!userId || userId === user.id) return
+    // уже есть диалог — открываем всегда (с не-другом история читается, писать не даст плашка)
+    const existing = dms.find((d) => d.otherUserId === userId)
+    if (existing) { setCurrentId(existing.id); setView('chat'); setPanel(null); return }
+    // ЛС — только друзьям: с не-другом новый диалог не создать — показываем профиль с «Добавить в друзья»
+    if (friends.loaded && !friends.isFriend(userId)) {
+      const m = membersById.get(userId)
+      if (m) setProfileMember(m)
+      toast.info('Личные сообщения доступны только друзьям — сначала добавьте в друзья')
+      return
+    }
     try {
       const dm = await api.openDm(userId)
       setDms((d) => (d.some((x) => x.id === dm.id) ? d : [...d, dm]))
@@ -631,6 +671,53 @@ export function MainWindow() {
       setView('chat')
       setPanel(null)
     } catch (e) { toast.error(apiError(e, 'Не удалось открыть личные сообщения')) }
+  }
+
+  // ---- порядок серверов в рейле (личный) ----
+  function reorderServers(orderedIds: string[]) {
+    const prev = servers
+    const byId = new Map(servers.map((s) => [s.id, s]))
+    setServers(orderedIds.map((id) => byId.get(id)).filter((s): s is ServerSummary => !!s)) // оптимистично
+    api.reorderServers(orderedIds).then(setServers).catch((e) => { setServers(prev); toast.error(apiError(e, 'Не удалось сохранить порядок серверов')) })
+  }
+
+  // ---- группы (категории) и раскладка каналов ----
+  async function refreshTree(sid: string) {
+    const t = await api.serverTree(sid)
+    if (currentServerIdRef.current === sid) setTree(t)
+    setServerChannels((m) => { const n = new Map(m); n.set(sid, t.channels); return n })
+  }
+  async function createCategory(name: string) {
+    const sid = currentServerIdRef.current
+    await api.createCategory(sid, name)
+    await refreshTree(sid)
+  }
+  async function renameCategory(id: string, name: string) {
+    await api.renameCategory(id, name)
+    await refreshTree(currentServerIdRef.current)
+  }
+  async function deleteCategory(id: string) {
+    await api.deleteCategory(id)
+    await refreshTree(currentServerIdRef.current)
+  }
+  function reorderCategories(orderedIds: string[]) {
+    const sid = currentServerIdRef.current
+    const prev = tree
+    setTree((t) => ({ ...t, categories: t.categories.map((c) => ({ ...c, position: orderedIds.indexOf(c.id) })) })) // оптимистично
+    api.reorderCategories(sid, orderedIds).catch((e) => {
+      if (currentServerIdRef.current === sid) setTree(prev)
+      toast.error(apiError(e, 'Не удалось переставить группы'))
+    })
+  }
+  function layoutChannels(items: { id: string; categoryId: string | null }[]) {
+    const sid = currentServerIdRef.current
+    const prev = tree
+    const pos = new Map(items.map((it, i) => [it.id, { position: i, categoryId: it.categoryId }]))
+    setTree((t) => ({ ...t, channels: t.channels.map((c) => { const p = pos.get(c.id); return p ? { ...c, ...p } : c }) })) // оптимистично
+    api.layoutChannels(sid, items).catch((e) => {
+      if (currentServerIdRef.current === sid) setTree(prev)
+      toast.error(apiError(e, 'Не удалось переместить канал'))
+    })
   }
 
   function switchServer(id: string) {
@@ -659,7 +746,7 @@ export function MainWindow() {
     else { setCurrentServerId(''); setView('chat') }
   }
 
-  async function createChannel(p: { name: string; type: ChannelType }) {
+  async function createChannel(p: { name: string; type: ChannelType; categoryId: string | null }) {
     const sid = currentServerIdRef.current
     const ch = await api.createChannel(p, sid)
     const t = await api.serverTree(sid)
@@ -671,17 +758,19 @@ export function MainWindow() {
   return (
     <div style={{ position: 'relative', height: '100%', display: 'flex', flexDirection: 'column' }}>
       <div style={{ flex: 1, minHeight: 0, display: 'flex' }}>
-        <GuildRail servers={servers} currentId={currentServerId} badges={serverBadges} onSwitch={switchServer} onAdd={() => setServerActionsOpen(true)} />
+        <GuildRail servers={servers} currentId={currentServerId} badges={serverBadges} onSwitch={switchServer} onAdd={() => setServerActionsOpen(true)} onReorder={reorderServers} />
         <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
       {/* тяжёлые разделы под своими границами ошибок: падение одного не должно уносить всё окно */}
       {view === 'admin' && canModerate ? (
         <ErrorBoundary label="Админка">
-          <AdminScreen serverId={currentServerId} isHome={servers.length > 0 && currentServerId === servers[0]?.id} onClose={() => setView('chat')} onRenamed={onServerRenamed} onLeft={onServerLeft} />
+          {/* домашний = минимальный id (как AccessGuard на бэке), а не первый в рейле — порядок рейла теперь личный */}
+          <AdminScreen serverId={currentServerId} isHome={!!currentServerId && currentServerId === homeServerId(servers)} onClose={() => setView('chat')} onRenamed={onServerRenamed} onLeft={onServerLeft} />
         </ErrorBoundary>
       ) : (
         <div style={{ flex: 1, minHeight: 0, display: 'flex' }}>
           <ChannelSidebar
             channels={tree.channels}
+            categories={tree.categories}
             dms={dms}
             members={members}
             readStates={readStates}
@@ -697,7 +786,17 @@ export function MainWindow() {
             onMarkRead={markReadChannel}
             onSetNotif={setChannelNotif}
             onCreateChannel={createChannel}
+            onCreateCategory={createCategory}
+            onRenameCategory={renameCategory}
+            onDeleteCategory={deleteCategory}
+            onReorderCategories={reorderCategories}
+            onLayoutChannels={layoutChannels}
+            friendsActive={view === 'friends'}
+            onOpenFriends={() => { setView('friends'); setPanel(null) }}
           />
+          {view === 'friends' ? (
+            <ErrorBoundary label="Друзья"><FriendsView onOpenDm={openDm} /></ErrorBoundary>
+          ) : (
           <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', background: 'var(--win)' }}>
           {/* header */}
           <div style={{ height: 62, flex: 'none', display: 'flex', alignItems: 'center', gap: 13, padding: '0 22px', borderBottom: '1px solid var(--border)', background: 'var(--surface)' }}>
@@ -747,6 +846,11 @@ export function MainWindow() {
                   <div style={{ flex: 'none', padding: '15px 18px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 9, color: 'var(--text-3)', fontSize: 13, borderTop: '1px solid var(--border)', background: 'var(--surface)' }}>
                     <Lock size={15} /> Системный канал — писать может только система
                   </div>
+                ) : dmLocked && currentDm ? (
+                  <div style={{ flex: 'none', padding: '12px 18px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 14, flexWrap: 'wrap', color: 'var(--text-3)', fontSize: 13, borderTop: '1px solid var(--border)', background: 'var(--surface)' }}>
+                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}><Lock size={15} /> {currentDm.name} не у вас в друзьях — писать в личные можно только друзьям</span>
+                    <FriendshipActions userId={currentDm.otherUserId} username={currentDm.name} showFriendBadge={false} />
+                  </div>
                 ) : (
                   <Composer channelName={channel?.name ?? ''} onSend={send} onType={() => ws.typing(currentId)} replyToName={replyTo?.authorName} onCancelReply={() => setReplyTo(null)} />
                 )}
@@ -761,6 +865,7 @@ export function MainWindow() {
             )}
           </div>
           </div>
+          )}
         </div>
       )}
         </div>

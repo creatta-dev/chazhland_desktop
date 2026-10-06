@@ -6,6 +6,9 @@ import type { Category, Channel, MessageType, Role } from '../types'
 export interface Page<T> { items: T[]; nextCursor: string | null; hasMore: boolean }
 
 export interface UserDto { id: string; username: string; avatarUrl: string | null; status?: string; statusMessage?: string | null; role?: Role }
+// раздел «Друзья»: status — присутствие ('online'/'idle'/'dnd'/'offline'), since — ISO-время
+export interface FriendDto { userId: string; username: string; avatarUrl: string | null; status: string; since: string }
+export interface FriendListDto { friends: FriendDto[]; incoming: FriendDto[]; outgoing: FriendDto[] }
 // строка админ-панели «Пользователи»: email приходит только владельцу инсталляции, иначе null (ПДн)
 export interface AdminUserDto { id: string; username: string; email: string | null; status: string; createdAt: string }
 export interface MemberDto { userId: string; username: string; avatarUrl: string | null; role: Role; status: string; joinedAt: string; soundboardDisabled?: boolean; roleIds?: string[]; statusMessage?: string | null }

@@ -1,6 +1,6 @@
 import { MOCK } from '../config'
 import { http } from '../http'
-import type { Channel, ChannelType, NotificationLevel } from '../types'
+import type { Category, Channel, ChannelType, NotificationLevel } from '../types'
 import type { ChannelDto } from './dto'
 import { MOCK_CHANNELS } from '@/mocks/data'
 
@@ -26,6 +26,32 @@ export async function deleteChannel(id: string): Promise<void> {
   await http(`/channels/${id}`, { method: 'DELETE' })
 }
 
+// ---- категории (группы сайдбара) и раскладка каналов (MANAGE_CHANNELS) ----
+// Остальным участникам изменения прилетают сигналом /topic/server.{id}.tree → перечитать дерево.
+export async function createCategory(serverId: string, name: string): Promise<Category> {
+  if (MOCK) return { id: 'cat_' + crypto.randomUUID().slice(0, 8), name, position: 99 }
+  return http<Category>(`/servers/${serverId}/categories`, { method: 'POST', body: JSON.stringify({ name }) })
+}
+export async function renameCategory(id: string, name: string): Promise<Category> {
+  if (MOCK) return { id, name, position: 0 }
+  return http<Category>(`/categories/${id}`, { method: 'PATCH', body: JSON.stringify({ name }) })
+}
+/** Удалить категорию — каналы НЕ удаляются, становятся «без категории». */
+export async function deleteCategory(id: string): Promise<void> {
+  if (MOCK) return
+  await http(`/categories/${id}`, { method: 'DELETE' })
+}
+/** Порядок категорий: ПОЛНЫЙ список id в новом порядке. */
+export async function reorderCategories(serverId: string, orderedIds: string[]): Promise<void> {
+  if (MOCK) return
+  await http(`/servers/${serverId}/categories/reorder`, { method: 'PUT', body: JSON.stringify({ orderedIds }) })
+}
+/** Раскладка каналов: ПОЛНЫЙ список в порядке отображения + категория каждого (null — без категории). */
+export async function layoutChannels(serverId: string, items: { id: string; categoryId: string | null }[]): Promise<void> {
+  if (MOCK) return
+  await http(`/servers/${serverId}/channels/layout`, { method: 'PUT', body: JSON.stringify({ items }) })
+}
+
 // ---- уведомления по каналам (персональные, синкаются между устройствами) ----
 export async function notificationSettings(): Promise<{ channelId: string; level: NotificationLevel }[]> {
   if (MOCK) return []
@@ -36,4 +62,7 @@ export async function setChannelNotification(channelId: string, level: Notificat
   await http(`/channels/${channelId}/notification-setting`, { method: 'PUT', body: JSON.stringify({ level }) })
 }
 
-export const channelsApi = { createChannel, updateChannel, deleteChannel, notificationSettings, setChannelNotification }
+export const channelsApi = {
+  createChannel, updateChannel, deleteChannel, notificationSettings, setChannelNotification,
+  createCategory, renameCategory, deleteCategory, reorderCategories, layoutChannels,
+}

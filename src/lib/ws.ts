@@ -3,6 +3,8 @@ import { MOCK, WS_URL } from './config'
 import type { AchievementEvent, AfkEvent, QuorumEvent, RankEvent, WatchAction, WatchState } from './types'
 
 export interface WsEvent { type: string; channelId?: string; message?: unknown; userId?: string; username?: string; messageId?: string; emoji?: string }
+/** Сигнал из /topic/user.{id}.friends (бэк: ws/FriendEvent). userId/username — вторая сторона. */
+export interface FriendEvent { type: 'REQUEST_RECEIVED' | 'REQUEST_ACCEPTED' | 'CHANGED'; userId: string; username: string }
 /** Ответ бэка на отказ в @MessageMapping-обработчике (ws/WsError.java): статус + человеческий текст. */
 export interface WsErrorEvent { status: number; message: string }
 export type WsStatus = 'online' | 'connecting'
@@ -87,6 +89,14 @@ class Ws {
   /** Авто-AFK сервера: /topic/server.{id}.afk (сигнал «уйди в AFK-канал») */
   onServerAfk(serverId: string, cb: (e: AfkEvent) => void): () => void {
     return this.subscribeTopic(`/topic/server.${serverId}.afk`, cb as (b: any) => void)
+  }
+  /** Структура каналов/категорий сервера изменилась: /topic/server.{id}.tree → перечитать дерево. */
+  onServerTree(serverId: string, cb: () => void): () => void {
+    return this.subscribeTopic(`/topic/server.${serverId}.tree`, () => cb())
+  }
+  /** Личный топик друзей: /topic/user.{meId}.friends (заявки/принятия/удаления — сигнал перечитать список). */
+  onUserFriends(userId: string, cb: (e: FriendEvent) => void): () => void {
+    return this.subscribeTopic(`/topic/user.${userId}.friends`, cb as (b: any) => void)
   }
   typing(channelId: string) {
     if (MOCK || !this.client?.connected) return

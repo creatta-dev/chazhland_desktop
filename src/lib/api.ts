@@ -7,6 +7,7 @@ import { authApi } from './api/auth'
 import { channelsApi } from './api/channels'
 import { digestApi } from './api/digest'
 import { dmApi } from './api/dm'
+import { friendsApi } from './api/friends'
 import { mediaApi } from './api/media'
 import { membersApi } from './api/members'
 import { messagesApi } from './api/messages'
@@ -24,6 +25,7 @@ import { watchApi } from './api/watch'
 // типы, которые компоненты импортируют из '@/lib/api'
 export type { AuthResult } from './api/auth'
 export type { ServerTree } from './api/servers'
+export { homeServerId } from './api/servers'
 export type { SoundClip } from './api/soundboard'
 
 export const api = {
@@ -32,6 +34,7 @@ export const api = {
   ...serversApi,       // серверы, инвайты, дерево каналов
   ...channelsApi,      // каналы и уведомления по ним
   ...dmApi,            // личные сообщения
+  ...friendsApi,       // друзья (ЛС — только друзьям)
   ...membersApi,       // участники сервера
   ...rolesApi,         // роли и доступ к каналам
   ...messagesApi,      // лента, поиск, пины, реакции

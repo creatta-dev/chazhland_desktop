@@ -5,7 +5,12 @@ import { Avatar } from '@/components/Avatar'
 import { RankChip } from '@/components/RankChip'
 import { Skeleton } from '@/components/Skeleton'
 import { api } from '@/lib/api'
+import { friends } from '@/lib/friends'
 import type { AchievementShowcaseItem, Member, MemberRank } from '@/lib/types'
+import { FriendshipActions } from './FriendshipActions'
+
+// системный пользователь «Система» (бэк: User.SYSTEM_ID) — в друзья его не добавить
+const SYSTEM_USER_ID = 'SYSTEM00000000000000000000'
 
 // Профиль участника: аватар, ник, ранг и ВИТРИНА АЧИВОК (api.userAchievements — все открытые или только
 // закреплённые, по настройке владельца). Открывается кликом по аватару в списке участников.
@@ -17,6 +22,9 @@ export function ProfileModal({ member, rank, self, onClose, onOpenDm }: {
   onOpenDm?: (userId: string) => void
 }) {
   const [ach, setAch] = useState<AchievementShowcaseItem[] | null>(null)
+  const [, setTick] = useState(0)
+  useEffect(() => friends.subscribe(() => setTick((t) => t + 1)), [])
+  const isFriend = friends.isFriend(member.userId)
   useEffect(() => {
     let a = true
     api.userAchievements(member.userId).then((r) => { if (a) setAch(r) }).catch(() => { if (a) setAch([]) })
@@ -52,10 +60,16 @@ export function ProfileModal({ member, rank, self, onClose, onOpenDm }: {
         )}
       </div>
 
-      {!self && onOpenDm && (
-        <button onClick={() => { onOpenDm(member.userId); onClose() }} className="accent-btn no-drag" style={{ marginTop: 22, display: 'flex', alignItems: 'center', gap: 8, borderRadius: 12, padding: '11px 18px', fontWeight: 700, fontSize: 14 }}>
-          <MessageSquare size={16} /> Написать
-        </button>
+      {!self && (
+        <div style={{ marginTop: 22, display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+          {/* ЛС — только друзьям: «Написать» есть лишь у друга, остальным — кнопки дружбы */}
+          {onOpenDm && isFriend && (
+            <button onClick={() => { onOpenDm(member.userId); onClose() }} className="accent-btn no-drag" style={{ display: 'flex', alignItems: 'center', gap: 8, borderRadius: 12, padding: '11px 18px', fontWeight: 700, fontSize: 14 }}>
+              <MessageSquare size={16} /> Написать
+            </button>
+          )}
+          {member.userId !== SYSTEM_USER_ID && <FriendshipActions userId={member.userId} username={member.username} />}
+        </div>
       )}
     </Modal>
   )

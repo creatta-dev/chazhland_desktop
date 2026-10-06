@@ -1,26 +1,42 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Hash, Volume2, Play, Plus, MicOff, HeadphoneOff, VolumeX, ChevronDown, Settings, Check, Link } from 'lucide-react'
-import type { Channel, ChannelType, Dm, Member, NotificationLevel, ReadState } from '@/lib/types'
+import { Hash, Volume2, Play, Plus, MicOff, HeadphoneOff, VolumeX, ChevronDown, Settings, Check, Link, Users, Lock, FolderPlus, Pencil, Trash2 } from 'lucide-react'
+import type { Category, Channel, ChannelType, Dm, Member, NotificationLevel, ReadState } from '@/lib/types'
 import { voice, type VoiceState } from '@/lib/voice'
 import { presence } from '@/lib/presence'
+import { friends } from '@/lib/friends'
 import { Avatar } from '@/components/Avatar'
 import { toast } from '@/lib/toast'
+import { apiError } from '@/lib/http'
 import { MOCK } from '@/lib/config'
 import { formatElapsed } from '@/lib/format'
 import { ContextMenu, type ContextMenuItem } from '@/components/ui'
+import { ConfirmModal } from '@/features/admin/modals'
 import { CreateChannelModal } from './CreateChannelModal'
+import { NameModal } from './NameModal'
 
 const TYPE_ICON: Record<string, React.ReactNode> = { TEXT: <Hash size={17} />, VOICE: <Volume2 size={17} />, WATCH: <Play size={16} /> }
+// имена групп, которые получили старые серверы при переходе на категории (V26) и новые — от сидера
+const DEFAULT_GROUP: Record<string, string> = { TEXT: 'Текстовые', VOICE: 'Голосовые', WATCH: 'Кинотеатр' }
+const NONE = '__none__' // ключ группы «без категории» (наверху списка, без заголовка)
 
 // Унифицированный житель голосового канала. rich=true — мы подключены к этому каналу и знаем
 // живой стейт из LiveKit (говорит/мьют/громкость); rich=false — только членство из presence.
 interface Occupant { userId: string; name: string; avatarUrl: string | null; speaking: boolean; micOn: boolean; deafened: boolean; volume: number; self: boolean; rich: boolean; joinedAt?: string | null }
 
-// Левый сайдбар каналов в стиле Discord: категории → каналы, под голосовыми — кто там сейчас.
+interface Group { key: string; category: Category | null; list: Channel[] }
+type Drag = { kind: 'channel' | 'category'; id: string } | null
+type Hint = { kind: 'channel'; group: string; index: number } | { kind: 'category'; index: number } | null
+
+// Левый сайдбар каналов в стиле Discord: группы (категории сервера) → каналы, под голосовыми — кто там сейчас.
+// Админ (canManage) перетаскивает группы и каналы (в т.ч. между группами), создаёт/переименовывает/удаляет
+// группы. Изменения применяются оптимистично в MainWindow; остальным они приходят сигналом .tree по WS.
 export function ChannelSidebar({
-  channels, dms, members, readStates, currentId, voiceState, unread, meId, canManage, notifLevels, voiceSince, onPick, onEditChannel, onMarkRead, onSetNotif, onCreateChannel,
+  channels, categories, dms, members, readStates, currentId, voiceState, unread, meId, canManage, notifLevels, voiceSince,
+  friendsActive, onOpenFriends, onPick, onEditChannel, onMarkRead, onSetNotif, onCreateChannel,
+  onCreateCategory, onRenameCategory, onDeleteCategory, onReorderCategories, onLayoutChannels,
 }: {
   channels: Channel[]
+  categories: Category[]
   dms: Dm[]
   members: Member[]
   readStates: ReadState[]
@@ -28,25 +44,51 @@ export function ChannelSidebar({
   voiceState: VoiceState
   unread: Set<string>
   meId: string
-  canManage: boolean // OWNER/ADMIN — показываем «Изменить/Удалить канал»
+  canManage: boolean // OWNER/ADMIN — правка каналов и групп, перетаскивание
   notifLevels: Map<string, NotificationLevel>
   voiceSince?: Map<string, string> // userId → joinedAt: «сидит в комнате N» (api.voiceSince)
+  friendsActive: boolean
+  onOpenFriends: () => void
   onPick: (id: string) => void
   onEditChannel: (c: Channel) => void
   onMarkRead: (c: Channel) => void
   onSetNotif: (channelId: string, level: NotificationLevel) => void
-  onCreateChannel: (p: { name: string; type: ChannelType }) => Promise<void>
+  onCreateChannel: (p: { name: string; type: ChannelType; categoryId: string | null }) => Promise<void>
+  onCreateCategory: (name: string) => Promise<void>
+  onRenameCategory: (id: string, name: string) => Promise<void>
+  onDeleteCategory: (id: string) => Promise<void>
+  onReorderCategories: (orderedIds: string[]) => void
+  onLayoutChannels: (items: { id: string; categoryId: string | null }[]) => void
 }) {
   const [, setTick] = useState(0)
   useEffect(() => presence.subscribe(() => setTick((t) => t + 1)), []) // живой ростер голосовых (join/leave по WS)
+  useEffect(() => friends.subscribe(() => setTick((t) => t + 1)), []) // бейдж заявок + замки на ЛС
   useEffect(() => { const t = window.setInterval(() => setTick((x) => x + 1), 30000); return () => window.clearInterval(t) }, []) // тик таймеров «в комнате»
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
-  const [createOpen, setCreateOpen] = useState(false)
-  const [menu, setMenu] = useState<{ c: Channel; x: number; y: number } | null>(null) // ПКМ-контекст-меню канала
+  const [createFor, setCreateFor] = useState<{ categoryId?: string | null } | null>(null) // открыта «Создать канал» (опц. — в группу)
+  const [menu, setMenu] = useState<{ c: Channel; x: number; y: number } | null>(null) // ПКМ-меню канала
+  const [catMenu, setCatMenu] = useState<{ cat: Category; x: number; y: number } | null>(null) // ПКМ-меню группы
+  const [addMenu, setAddMenu] = useState<{ x: number; y: number } | null>(null) // «+» в шапке: канал / группа
+  const [nameModal, setNameModal] = useState<{ mode: 'create' } | { mode: 'rename'; cat: Category } | null>(null)
+  const [deleteCat, setDeleteCat] = useState<Category | null>(null)
+  const [deleting, setDeleting] = useState(false)
+  const [drag, setDrag] = useState<Drag>(null)
+  const [hint, setHint] = useState<Hint>(null)
 
   const memberBy = useMemo(() => new Map(members.map((m) => [m.userId, m])), [members])
   const rs = useMemo(() => Object.fromEntries(readStates.map((r) => [r.channelId, r])), [readStates])
   const firstVoiceId = useMemo(() => channels.find((c) => c.type === 'VOICE')?.id, [channels])
+
+  const byPos = (a: { position: number }, b: { position: number }) => a.position - b.position
+  const sortedCats = useMemo(() => [...categories].sort(byPos), [categories])
+  // группы: «без категории» наверху (без заголовка, как в Discord) + категории сервера по position
+  const groups = useMemo<Group[]>(() => {
+    const known = new Set(sortedCats.map((c) => c.id))
+    return [
+      { key: NONE, category: null, list: channels.filter((c) => !c.categoryId || !known.has(c.categoryId)).sort(byPos) },
+      ...sortedCats.map((cat) => ({ key: cat.id, category: cat, list: channels.filter((c) => c.categoryId === cat.id).sort(byPos) })),
+    ]
+  }, [channels, sortedCats])
 
   // кто сейчас в голосовом: свой подключённый канал → живые участники LiveKit (speaking/мьют/громкость),
   // остальные → членство из presence (бэк знает по LiveKit-вебхукам, но без мьют-стейта). В mock — демо-ростер.
@@ -66,16 +108,82 @@ export function ChannelSidebar({
     })
   }
 
-  // фиксированная разбивка по ТИПУ канала: текстовые → голосовые → кинотеатр (категории бэка для группировки не используем)
-  const byPos = (a: { position: number }, b: { position: number }) => a.position - b.position
-  const sections = useMemo(
-    () => ([{ key: 'TEXT', title: 'Текстовые' }, { key: 'VOICE', title: 'Голосовые' }, { key: 'WATCH', title: 'Кинотеатр' }] as const)
-      .map((s) => ({ ...s, list: channels.filter((c) => c.type === s.key).sort(byPos) })),
-    [channels],
-  )
+  // куда по умолчанию класть новый канал: группа, где уже есть каналы этого типа, иначе — с «типовым» именем
+  function defaultCategoryFor(type: ChannelType): string | null {
+    for (const g of groups) if (g.category && g.list.some((c) => c.type === type)) return g.category.id
+    const want = DEFAULT_GROUP[type]?.toLowerCase()
+    return sortedCats.find((c) => c.name.trim().toLowerCase() === want)?.id ?? null
+  }
 
-  const renderChannel = (c: Channel) => (
-    <ChannelRow key={c.id} c={c} rs={rs[c.id]} active={c.id === currentId} connected={c.id === voiceState.channelId} unread={unread.has(c.id)} occupants={occupantsOf(c)} onPick={onPick} onMenu={(e) => { e.preventDefault(); setMenu({ c, x: e.clientX, y: e.clientY }) }} />
+  // ---------------- drag-n-drop (только canManage) ----------------
+  function endDrag() { setDrag(null); setHint(null) }
+
+  function overChannel(e: React.DragEvent, group: string, index: number) {
+    if (drag?.kind !== 'channel') return
+    e.preventDefault()
+    e.dataTransfer.dropEffect = 'move'
+    const r = e.currentTarget.getBoundingClientRect()
+    const after = e.clientY > r.top + r.height / 2
+    setHint({ kind: 'channel', group, index: index + (after ? 1 : 0) })
+  }
+  function overGroupStart(e: React.DragEvent, group: string) { // заголовок группы / пустая зона → в начало группы
+    if (drag?.kind !== 'channel') return
+    e.preventDefault()
+    e.stopPropagation()
+    setHint({ kind: 'channel', group, index: 0 })
+  }
+  function overCategory(e: React.DragEvent, catIndex: number) {
+    if (drag?.kind !== 'category') return
+    e.preventDefault()
+    e.dataTransfer.dropEffect = 'move'
+    const r = e.currentTarget.getBoundingClientRect()
+    setHint({ kind: 'category', index: catIndex + (e.clientY > r.top + r.height / 2 ? 1 : 0) })
+  }
+
+  function drop(e: React.DragEvent) {
+    e.preventDefault()
+    e.stopPropagation()
+    const d = drag, h = hint
+    endDrag()
+    if (!d || !h) return
+    if (d.kind === 'category' && h.kind === 'category') {
+      const before = sortedCats.map((c) => c.id)
+      const ids = before.slice()
+      const from = ids.indexOf(d.id)
+      if (from < 0) return
+      ids.splice(from, 1)
+      ids.splice(h.index > from ? h.index - 1 : h.index, 0, d.id)
+      if (ids.join() !== before.join()) onReorderCategories(ids)
+      return
+    }
+    if (d.kind === 'channel' && h.kind === 'channel') {
+      const arr = groups.map((g) => ({ key: g.key, catId: g.category?.id ?? null, ids: g.list.map((c) => c.id) }))
+      const src = arr.find((g) => g.ids.includes(d.id))
+      const dst = arr.find((g) => g.key === h.group)
+      if (!src || !dst) return
+      const from = src.ids.indexOf(d.id)
+      src.ids.splice(from, 1)
+      dst.ids.splice(src === dst && h.index > from ? h.index - 1 : h.index, 0, d.id)
+      const items = arr.flatMap((g) => g.ids.map((id) => ({ id, categoryId: g.catId })))
+      const sig = (xs: { id: string; categoryId: string | null }[]) => xs.map((x) => `${x.id}:${x.categoryId ?? ''}`).join()
+      const before = groups.flatMap((g) => g.list.map((c) => ({ id: c.id, categoryId: g.category?.id ?? null })))
+      if (sig(items) !== sig(before)) onLayoutChannels(items)
+    }
+  }
+
+  const Line = () => <div style={{ height: 2, borderRadius: 2, background: 'var(--accent)', margin: '1px 6px' }} />
+
+  const renderChannel = (c: Channel, group: string, index: number) => (
+    <div key={c.id}
+      draggable={canManage}
+      onDragStart={(e) => { if (!canManage) return; e.stopPropagation(); e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', c.id); setDrag({ kind: 'channel', id: c.id }) }}
+      onDragOver={(e) => overChannel(e, group, index)}
+      onDrop={drop}
+      onDragEnd={endDrag}
+      style={{ opacity: drag?.kind === 'channel' && drag.id === c.id ? 0.4 : 1 }}>
+      {hint?.kind === 'channel' && hint.group === group && hint.index === index && <Line />}
+      <ChannelRow c={c} rs={rs[c.id]} active={c.id === currentId} connected={c.id === voiceState.channelId} unread={unread.has(c.id)} occupants={occupantsOf(c)} onPick={onPick} onMenu={(e) => { e.preventDefault(); setMenu({ c, x: e.clientX, y: e.clientY }) }} />
+    </div>
   )
 
   const menuItems = (c: Channel): ContextMenuItem[] => {
@@ -91,53 +199,137 @@ export function ChannelSidebar({
     }
     return items
   }
+  const catMenuItems = (cat: Category): ContextMenuItem[] => [
+    { label: 'Создать канал здесь', icon: <Plus size={15} />, onClick: () => setCreateFor({ categoryId: cat.id }) },
+    { label: 'Переименовать группу', icon: <Pencil size={15} />, onClick: () => setNameModal({ mode: 'rename', cat }) },
+    { label: 'Удалить группу', icon: <Trash2 size={15} />, danger: true, onClick: () => setDeleteCat(cat) },
+  ]
+
+  const friendList = friends.get()
+  const requests = friendList.incoming.length
+  const draggingChannel = drag?.kind === 'channel'
 
   return (
     <aside style={{ width: 250, flex: 'none', display: 'flex', flexDirection: 'column', background: 'var(--surface)', borderRight: '1px solid var(--border)', overflow: 'hidden' }}>
       <div className="drag" style={{ height: 62, flex: 'none', display: 'flex', alignItems: 'center', gap: 10, padding: '0 16px', borderBottom: '1px solid var(--border)' }}>
         <div style={{ fontWeight: 800, fontSize: 16, flex: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>Каналы</div>
-        <button className="ib no-drag" onClick={() => setCreateOpen(true)} title="Создать канал" style={{ width: 32, height: 32 }}><Plus size={17} /></button>
+        <button className="ib no-drag" title={canManage ? 'Создать канал или группу' : 'Создать канал'} style={{ width: 32, height: 32 }}
+          onClick={(e) => {
+            if (!canManage) { setCreateFor({}); return }
+            const r = e.currentTarget.getBoundingClientRect()
+            setAddMenu({ x: r.left, y: r.bottom + 4 })
+          }}><Plus size={17} /></button>
       </div>
 
-      <div style={{ overflow: 'auto', flex: 1, padding: '10px 8px 16px' }}>
-        {sections.map((s, i) => {
-          if (s.list.length === 0) return null
-          const isCol = collapsed.has(s.key)
+      <div style={{ overflow: 'auto', flex: 1, padding: '10px 8px 16px' }} onDragOver={(e) => { if (drag) e.preventDefault() }} onDrop={drop}>
+        {groups.map((g) => {
+          // ---- «без группы»: наверху, без заголовка; пока тащат канал — видна как зона сброса
+          if (!g.category) {
+            if (g.list.length === 0) {
+              return draggingChannel
+                ? <DropZone key={g.key} label="Без группы" active={hint?.kind === 'channel' && hint.group === g.key} onDragOver={(e) => overGroupStart(e, g.key)} onDrop={drop} />
+                : null
+            }
+            return (
+              <div key={g.key} style={{ marginBottom: 6 }}>
+                {g.list.map((c, i) => renderChannel(c, g.key, i))}
+                {hint?.kind === 'channel' && hint.group === g.key && hint.index === g.list.length && <Line />}
+              </div>
+            )
+          }
+          // ---- категория
+          const cat = g.category
+          const myIndex = sortedCats.findIndex((c) => c.id === cat.id)
+          if (g.list.length === 0 && !canManage) return null // пустые группы видит только тот, кто может их наполнить
+          const isCol = collapsed.has(cat.id)
           return (
-            <div key={s.key} style={{ marginTop: i === 0 ? 0 : 12 }}>
+            <div key={g.key} onDragOver={(e) => overCategory(e, myIndex)} onDrop={drop}
+              style={{ marginTop: 10, opacity: drag?.kind === 'category' && drag.id === cat.id ? 0.4 : 1 }}>
+              {hint?.kind === 'category' && hint.index === myIndex && <Line />}
               <button
                 className="no-drag"
-                onClick={() => setCollapsed((c) => { const n = new Set(c); n.has(s.key) ? n.delete(s.key) : n.add(s.key); return n })}
-                style={{ display: 'flex', alignItems: 'center', gap: 3, width: '100%', border: 'none', background: 'transparent', color: 'var(--text-3)', cursor: 'pointer', padding: '4px 6px 5px', fontSize: 11, fontWeight: 700, letterSpacing: '.06em', textTransform: 'uppercase' }}
+                draggable={canManage}
+                onDragStart={(e) => { if (!canManage) return; e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', cat.id); setDrag({ kind: 'category', id: cat.id }) }}
+                onDragOver={(e) => overGroupStart(e, cat.id)}
+                onDragEnd={endDrag}
+                onClick={() => setCollapsed((c) => { const n = new Set(c); n.has(cat.id) ? n.delete(cat.id) : n.add(cat.id); return n })}
+                onContextMenu={(e) => { if (!canManage) return; e.preventDefault(); setCatMenu({ cat, x: e.clientX, y: e.clientY }) }}
+                title={canManage ? 'Перетащите, чтобы изменить порядок · ПКМ — меню группы' : undefined}
+                style={{ display: 'flex', alignItems: 'center', gap: 3, width: '100%', border: 'none', background: hint?.kind === 'channel' && hint.group === cat.id && hint.index === 0 && draggingChannel ? 'var(--accent-tint)' : 'transparent', borderRadius: 6, color: 'var(--text-3)', cursor: canManage ? 'grab' : 'pointer', padding: '4px 6px 5px', fontSize: 11, fontWeight: 700, letterSpacing: '.06em', textTransform: 'uppercase' }}
               >
                 <ChevronDown size={12} style={{ transform: isCol ? 'rotate(-90deg)' : undefined, transition: 'transform .15s', flex: 'none' }} />
-                <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{s.title}</span>
+                <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{cat.name}</span>
               </button>
-              {!isCol && s.list.map(renderChannel)}
+              {!isCol && g.list.map((c, i) => renderChannel(c, g.key, i))}
+              {!isCol && g.list.length > 0 && hint?.kind === 'channel' && hint.group === g.key && hint.index === g.list.length && <Line />}
+              {!isCol && g.list.length === 0 && draggingChannel && (
+                <DropZone label="Перетащите канал сюда" active={hint?.kind === 'channel' && hint.group === g.key} onDragOver={(e) => overGroupStart(e, g.key)} onDrop={drop} />
+              )}
             </div>
           )
         })}
+        {hint?.kind === 'category' && hint.index === sortedCats.length && <Line />}
 
-        {dms.length > 0 && (
-          <div style={{ marginTop: 14 }}>
-            <div style={{ padding: '4px 6px 6px', fontSize: 11, fontWeight: 700, letterSpacing: '.06em', color: 'var(--text-3)', textTransform: 'uppercase' }}>Личные</div>
-            {dms.map((d) => {
-              const active = d.id === currentId
-              return (
-                <button key={d.id} className={`chan-row no-drag${active ? ' active' : ''}`} onClick={() => onPick(d.id)} style={rowStyle(active)}>
-                  <Avatar name={d.name} src={d.avatarUrl} size={22} />
-                  <span style={nameStyle(active, unread.has(d.id) && !active)}>{d.name}</span>
-                  {unread.has(d.id) && !active && <span style={DOT} />}
-                </button>
-              )
-            })}
-          </div>
-        )}
+        <div style={{ marginTop: 16 }}>
+          <button className={`chan-row no-drag${friendsActive ? ' active' : ''}`} onClick={onOpenFriends} style={rowStyle(friendsActive)}>
+            <span style={{ display: 'flex', flex: 'none', color: friendsActive ? 'var(--accent)' : 'var(--text-3)' }}><Users size={17} /></span>
+            <span style={nameStyle(friendsActive, requests > 0)}>Друзья</span>
+            {requests > 0 && <span title="Заявки в друзья" style={{ flex: 'none', background: 'var(--danger)', color: '#fff', borderRadius: 30, fontSize: 10, fontWeight: 700, padding: '0 6px', minWidth: 17, textAlign: 'center' }}>{requests}</span>}
+          </button>
+          {dms.length > 0 && (
+            <>
+              <div style={{ padding: '10px 6px 6px', fontSize: 11, fontWeight: 700, letterSpacing: '.06em', color: 'var(--text-3)', textTransform: 'uppercase' }}>Личные</div>
+              {dms.map((d) => {
+                const active = d.id === currentId
+                const locked = friends.loaded && !friends.isFriend(d.otherUserId)
+                return (
+                  <button key={d.id} className={`chan-row no-drag${active ? ' active' : ''}`} onClick={() => onPick(d.id)} style={rowStyle(active)}>
+                    <Avatar name={d.name} src={d.avatarUrl} size={22} />
+                    <span style={nameStyle(active, unread.has(d.id) && !active)}>{d.name}</span>
+                    {locked && <span title="Не в друзьях — переписка только для чтения" style={{ display: 'flex', flex: 'none', color: 'var(--text-3)' }}><Lock size={12} /></span>}
+                    {unread.has(d.id) && !active && <span style={DOT} />}
+                  </button>
+                )
+              })}
+            </>
+          )}
+        </div>
       </div>
 
-      {createOpen && <CreateChannelModal onCreate={onCreateChannel} onClose={() => setCreateOpen(false)} />}
+      {createFor && <CreateChannelModal categories={categories} defaultCategoryFor={defaultCategoryFor} initialCategoryId={createFor.categoryId} onCreate={onCreateChannel} onClose={() => setCreateFor(null)} />}
       {menu && <ContextMenu x={menu.x} y={menu.y} items={menuItems(menu.c)} onClose={() => setMenu(null)} layer="menuTop" />}
+      {catMenu && <ContextMenu x={catMenu.x} y={catMenu.y} items={catMenuItems(catMenu.cat)} onClose={() => setCatMenu(null)} layer="menuTop" />}
+      {addMenu && <ContextMenu x={addMenu.x} y={addMenu.y} onClose={() => setAddMenu(null)} layer="menuTop" items={[
+        { label: 'Создать канал', icon: <Hash size={15} />, onClick: () => setCreateFor({}) },
+        { label: 'Создать группу', icon: <FolderPlus size={15} />, onClick: () => setNameModal({ mode: 'create' }) },
+      ]} />}
+      {nameModal?.mode === 'create' && (
+        <NameModal title="Создать группу" label="Название группы" placeholder="например, Игры" confirmLabel="Создать" onSubmit={async (n) => { await onCreateCategory(n); toast.ok('Группа создана') }} onClose={() => setNameModal(null)} />
+      )}
+      {nameModal?.mode === 'rename' && (
+        <NameModal title="Переименовать группу" label="Название группы" initial={nameModal.cat.name} confirmLabel="Сохранить" onSubmit={(n) => onRenameCategory(nameModal.cat.id, n)} onClose={() => setNameModal(null)} />
+      )}
+      {deleteCat && (
+        <ConfirmModal title="Удалить группу" danger confirmLabel="Удалить" busy={deleting}
+          message={`Удалить группу «${deleteCat.name}»? Каналы не удалятся — переедут наверх, «без группы».`}
+          onConfirm={async () => {
+            setDeleting(true)
+            try { await onDeleteCategory(deleteCat.id); toast.ok('Группа удалена'); setDeleteCat(null) }
+            catch (e) { toast.error(apiError(e, 'Не удалось удалить группу')) }
+            finally { setDeleting(false) }
+          }}
+          onClose={() => setDeleteCat(null)} />
+      )}
     </aside>
+  )
+}
+
+function DropZone({ label, active, onDragOver, onDrop }: { label: string; active: boolean; onDragOver: (e: React.DragEvent) => void; onDrop: (e: React.DragEvent) => void }) {
+  return (
+    <div onDragOver={onDragOver} onDrop={onDrop}
+      style={{ margin: '4px 6px', padding: '9px 10px', borderRadius: 9, border: `1.5px dashed ${active ? 'var(--accent)' : 'var(--border-2)'}`, background: active ? 'var(--accent-tint)' : 'transparent', color: active ? 'var(--accent)' : 'var(--text-3)', fontSize: 12, textAlign: 'center' }}>
+      {label}
+    </div>
   )
 }
 

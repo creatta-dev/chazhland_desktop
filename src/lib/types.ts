@@ -19,6 +19,20 @@ export interface User {
   statusMessage?: string | null
 }
 
+// раздел «Друзья» (бэк: FriendResponse / FriendListResponse). ЛС — только друзьям.
+export interface Friend {
+  userId: string
+  username: string
+  avatarUrl: string | null
+  status: Presence
+  since: string // ISO: для друзей — когда приняли, для заявок — когда отправили
+}
+export interface FriendList {
+  friends: Friend[]
+  incoming: Friend[] // ждут МОЕГО ответа
+  outgoing: Friend[] // я жду ответа
+}
+
 // сервер в гилд-рейле (бэк: ServerSummaryResponse)
 export interface ServerSummary {
   id: string
